@@ -1,0 +1,20 @@
+# Swift / SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Релизные артефакты
+build/
+dist/
+*.dmg
+*.app
+*.zip
+
+# IDE
+.idea/
+.vscode/
