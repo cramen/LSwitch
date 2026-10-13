@@ -11,6 +11,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # На macos-раннерах xcode-select по умолчанию указывает на Command Line
+      # Tools без XCTest — переключаемся на полный Xcode (свежая версия).
+      - name: Select Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)/Contents/Developer"
+
       - name: Build
         run: swift build
 
