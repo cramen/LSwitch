@@ -29,6 +29,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        requestPermissionsIfNeeded()
+    }
+
+    /// Запрашиваем разрешения сразу при старте, чтобы спайки можно было
+    /// проверять. Диалоги macOS показывает только для .app-бандла с
+    /// собственной идентичностью; при запуске голого бинарника из терминала
+    /// ответственным процессом считается терминал. В этапе 1 это станет
+    /// частью онбординга (PermGuard).
+    private func requestPermissionsIfNeeded() {
+        if !AXIsProcessTrusted() {
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
+            _ = AXIsProcessTrustedWithOptions(options)
+        }
+        if !CGPreflightListenEventAccess() {
+            _ = CGRequestListenEventAccess()
+        }
     }
 
     private func setupStatusItem() {
