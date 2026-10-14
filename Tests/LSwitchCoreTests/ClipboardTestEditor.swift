@@ -89,8 +89,9 @@ final class ClipboardEditor {
             },
             restore: { snapshot in
                 self.restores += 1
-                if let item = snapshot.items.first, let data = item.dataByType["text"], let data {
-                    self.updateClipboard(String(decoding: data, as: UTF8.self))
+                if let item = snapshot.items.first, let data = item.dataByType["text"], let data,
+                   let text = String(bytes: data, encoding: .utf8) {
+                    self.updateClipboard(text)
                 }
             },
             changeCount: { self.count },
