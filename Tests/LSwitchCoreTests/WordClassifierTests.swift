@@ -26,13 +26,13 @@ final class WordClassifierTests: XCTestCase {
     }
 
     func testCorrectWordsAreNotTouched() {
-        XCTAssertEqual(makeClassifier().verdict(for: "привет"), .ok)
-        XCTAssertEqual(makeClassifier().verdict(for: "hello"), .ok)
+        XCTAssertEqual(makeClassifier().verdict(for: "привет"), .correct)
+        XCTAssertEqual(makeClassifier().verdict(for: "hello"), .correct)
     }
 
     func testUnknownWordIsNotTouched() {
-        XCTAssertEqual(makeClassifier().verdict(for: "qwertz"), .ok)
-        XCTAssertEqual(makeClassifier().verdict(for: "йцуке"), .ok)
+        XCTAssertEqual(makeClassifier().verdict(for: "qwertz"), .correct)
+        XCTAssertEqual(makeClassifier().verdict(for: "йцуке"), .correct)
     }
 
     func testShortWordsBlocked() {

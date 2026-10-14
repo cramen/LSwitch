@@ -13,7 +13,7 @@ public struct WordClassifier: Sendable {
         /// Слово набрано в неправильной раскладке, конвертировать.
         case wrongLayout(converted: String)
         /// Слово корректно для текущей раскладки или недостаточно данных.
-        case ok
+        case correct
         /// Эвристика запретила конвертацию (короткое, пароль-подобное,
         /// исключение из персонального словаря).
         case blockedByHeuristics
@@ -38,16 +38,16 @@ public struct WordClassifier: Sendable {
             return .blockedByHeuristics
         }
         let converted = layoutMap.invert(word)
-        guard converted != word else { return .ok }
+        guard converted != word else { return .correct }
         // Омограф: набранное слово само словарное (на любом языке) — не трогаем.
         if dictionaries.contains(word, language: .russian)
             || dictionaries.contains(word, language: .english) {
-            return .ok
+            return .correct
         }
         // Конвертированное слово должно быть словарным ровно для одного языка.
         let inRussian = dictionaries.contains(converted, language: .russian)
         let inEnglish = dictionaries.contains(converted, language: .english)
-        guard inRussian != inEnglish else { return .ok }
+        guard inRussian != inEnglish else { return .correct }
         return .wrongLayout(converted: converted)
     }
 
