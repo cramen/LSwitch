@@ -1,7 +1,7 @@
 ## 1. Тестовое окружение
 
 - [x] 1.1 Переключить `xcode-select` на полный Xcode (`sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`, затем принять лицензию при необходимости) и проверить, что `swift test` проходит все тесты `LSwitchCoreTests`
-- [ ] 1.2 Добавить GitHub Actions workflow (сборка + `swift test` на macos-runner с полным Xcode) и проверить, что CI зелёный на пустом PR
+- [x] 1.2 Добавить GitHub Actions workflow (сборка + `swift test` на macos-runner с полным Xcode) и проверить, что CI зелёный на пустом PR
 
 ## 2. Спайк P0.1: перехват клавиатуры (CGEventTap)
 
@@ -24,6 +24,6 @@
 
 ## 5. Решение ADR-001 и завершение этапа 0
 
-- [ ] 5.1 Собрать спайки с App Sandbox (с temporary exceptions при необходимости) и без; прогнать P0.1–P0.3 на sandbox-сборке; проверка: зафиксировано, работают ли event tap и AX-запись из-под sandbox
-- [ ] 5.2 Заполнить раздел «Решение» в `docs/adr/ADR-001-app-sandbox.md` по результатам 5.1 (sandbox + MAS либо дистрибуция вне MAS: Developer ID + notarization + Hardened Runtime); проверка: статус ADR изменён с «открыто» на «принято»
+- [x] 5.1 Собрать спайки с App Sandbox (с temporary exceptions при необходимости) и без; прогнать P0.1–P0.3 на sandbox-сборке; проверка: зафиксировано, работают ли event tap и AX-запись из-под sandbox
+- [x] 5.2 Заполнить раздел «Решение» в `docs/adr/ADR-001-app-sandbox.md` по результатам 5.1 (sandbox + MAS либо дистрибуция вне MAS: Developer ID + notarization + Hardened Runtime); проверка: статус ADR изменён с «открыто» на «принято»
 - [ ] 5.3 Обновить статусы этапа 0 в TZ.md (P0.1–P0.5) и README (статус проекта); проверка: все пункты этапа 0 отмечены, README не называет проект «этап 0»

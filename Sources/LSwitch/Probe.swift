@@ -16,15 +16,40 @@ enum Probe {
         print("CGPreflightListenEventAccess: \(CGPreflightListenEventAccess())")
 
         let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
+        final class Counter { var received = 0 }
+        let counter = Counter()
         let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .listenOnly,
             eventsOfInterest: eventMask,
-            callback: { _, _, event, _ in Unmanaged.passUnretained(event) },
-            userInfo: nil
+            callback: { _, _, event, userInfo in
+                if let userInfo {
+                    let counter = Unmanaged<Counter>.fromOpaque(userInfo).takeUnretainedValue()
+                    counter.received += 1
+                }
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: Unmanaged.passUnretained(counter).toOpaque()
         )
         print("tapCreate (keyboard, listenOnly): \(tap != nil ? "создан" : "НЕ СОЗДАН (nil)")")
+
+        if let tap {
+            let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+            CGEvent.tapEnable(tap: tap, enable: true)
+            guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0x31, keyDown: true) else {
+                print("не удалось создать тестовое событие")
+                exit(1)
+            }
+            event.post(tap: .cghidEventTap)
+            // Крутим runloop до 2 секунд, ожидая доставку события в tap.
+            let deadline = Date().addingTimeInterval(2)
+            while Date() < deadline && counter.received == 0 {
+                RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
+            }
+            print("доставка событий в tap: \(counter.received > 0 ? "РАБОТАЕТ" : "МОЛЧИТ (нет событий за 2 с)")")
+        }
 
         let systemWide = AXUIElementCreateSystemWide()
         var focused: CFTypeRef?
