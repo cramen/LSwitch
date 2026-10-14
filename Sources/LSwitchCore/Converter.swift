@@ -120,7 +120,9 @@ public final class Converter {
         frontmostBundleID: @escaping @Sendable () -> String?,
         prefersClipboard: @escaping @Sendable (String) -> Bool = { _ in false },
         makeAXEngine: @escaping @Sendable () -> any ConversionEngine = { AXConversionEngine() },
-        makeClipboardEngine: @escaping @Sendable (String?) -> any ConversionEngine = { ClipboardConversionEngine(expectedWord: $0) },
+        makeClipboardEngine: @escaping @Sendable (String?) -> any ConversionEngine = {
+            ClipboardConversionEngine(expectedWord: $0)
+        },
         onConverted: @escaping @Sendable () -> Void = {}
     ) {
         self.init(
