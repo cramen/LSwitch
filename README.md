@@ -10,19 +10,26 @@ Punto Switcher для Mac.
 
 - 🍎 Нативный Swift, universal binary (Apple Silicon + Intel), macOS 13+
 - 🔒 Ноль телеметрии и сетевых запросов, набранный текст не покидает память процесса
-- 📋 Буфер обмена не затирается (AX-режим либо полный restore)
+- 📋 Буфер обмена не затирается (AX-режим либо полный restore с проверкой хэшей)
 - 🎯 Per-app профили и защита от ложных срабатываний
-- 📖 Открытый код (MIT)
+- 📖 Открытый код (MIT); словари — OpenSubtitles CC-BY-SA (см. NOTICE.md)
+- 🛠 Работа через OpenSpec: изменения в `openspec/changes/`, требования — в спеках
 
 Техническое задание и план: [TZ.md](TZ.md)
 
 ## Сборка и запуск
 
 ```bash
-swift build            # сборка
-swift test             # unit-тесты
-swift run lswitch      # запуск menu-bar агента (каркас)
+make build      # сборка (toolchain полного Xcode, см. docs/dev-setup.md)
+make test       # unit-тесты
+make app        # .app-бандл со стабильной dev-подписью (.build/LSwitch.app)
+make run-app    # сборка + запуск menu-bar агента
 ```
+
+Для работы нужны разрешения Accessibility и Input Monitoring — приложение
+запросит их при первом старте. Подробности про подпись, TCC и диагностику
+(`lswitch --probe`, логи): [docs/dev-setup.md](docs/dev-setup.md),
+особенности macOS API: [docs/macos-quirks.md](docs/macos-quirks.md).
 
 ## Структура
 
