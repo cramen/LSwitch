@@ -53,9 +53,13 @@ public final class ClipboardConverter {
     @discardableResult
     public func convertSelection(pasteboard: NSPasteboard = .general) async -> Outcome {
         let snapshot = PasteboardService.capture(from: pasteboard)
+        // Fingerprint до операции — для проверки инварианта «буфер бит-в-бит
+        // идентичен» (задача 4.2): после восстановления сверяем в лог.
+        let fingerprintBefore = PasteboardService.fingerprint(of: pasteboard)
         defer {
             PasteboardService.restore(snapshot, to: pasteboard)
-            logger.debug("Буфер обмена восстановлен")
+            let restored = PasteboardService.fingerprint(of: pasteboard) == fingerprintBefore
+            logger.info("Буфер восстановлен, fingerprint совпадает: \(restored)")
         }
 
         var delay = configuration.initialReadDelay
