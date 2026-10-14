@@ -72,6 +72,10 @@ public final class Converter {
     public enum Outcome: Equatable {
         case converted(original: String, converted: String)
         case undone
+        /// Текст изменён и доступен для точного undo, но целевая раскладка не подтверждена.
+        case partiallyConverted(original: String, converted: String, targetLayout: Layout)
+        /// Исходный текст восстановлен; использованная запись undo удалена, раскладка не подтверждена.
+        case partiallyUndone(targetLayout: Layout)
         case blockedByRules
         case blockedBySafety
         case unsupportedLayout
@@ -83,6 +87,8 @@ public final class Converter {
             switch self {
             case .converted: return "converted"
             case .undone: return "undone"
+            case .partiallyConverted: return "partiallyConverted"
+            case .partiallyUndone: return "partiallyUndone"
             case .blockedByRules: return "blockedByRules"
             case .blockedBySafety: return "blockedBySafety"
             case .unsupportedLayout: return "unsupportedLayout"
@@ -93,7 +99,7 @@ public final class Converter {
     }
 
     private let currentLayout: () -> Layout?
-    private let switchLayout: (Layout) -> Void
+    private let switchLayout: (Layout) -> Bool
     private let appRules: AppRules
     private let undoStore: UndoStore
     private let frontmostBundleID: () -> String?
@@ -140,7 +146,7 @@ public final class Converter {
 
     public init(
         currentLayout: @escaping () -> Layout?,
-        switchLayout: @escaping (Layout) -> Void,
+        switchLayout: @escaping (Layout) -> Bool,
         appRules: AppRules,
         undoStore: UndoStore,
         frontmostBundleID: @escaping () -> String?,
@@ -226,7 +232,10 @@ public final class Converter {
             layoutBefore: layout, timestamp: Date(), trailingText: receipt.trailingText, bundleID: bundleID
         ))
         undoContext = valid
-        switchAndRecord(request.targetLayout(for: receipt.original) ?? layout.opposite, from: layout, since: startedAt)
+        let target = request.targetLayout(for: receipt.original) ?? layout.opposite
+        guard switchAndRecord(target, from: layout, since: startedAt) else {
+            return .partiallyConverted(original: receipt.original, converted: receipt.converted, targetLayout: target)
+        }
         onConverted()
         return .converted(original: receipt.original, converted: receipt.converted)
     }
@@ -245,14 +254,19 @@ public final class Converter {
         let result = await perform(request, bundleID: bundleID)
         guard case .success(let receipt) = result else { return outcome(for: result) }
         guard checks.valid(), receipt.converted == record.original else { return .failed }
-        switchAndRecord(record.layoutBefore, from: layout, since: startedAt)
+        guard switchAndRecord(record.layoutBefore, from: layout, since: startedAt) else {
+            return .partiallyUndone(targetLayout: record.layoutBefore)
+        }
         return .undone
     }
 
-    private func switchAndRecord(_ target: Layout, from source: Layout, since startedAt: UInt64) {
-        switchLayout(target)
-        guard source != target, currentLayout() == target else { return }
-        onLayoutSwitched(source, target, startedAt)
+    /// Полный успех требует подтверждения адаптера и текущего источника.
+    /// Уже подходящая раскладка не требует новой команды и не создаёт окно коррекции Unicode.
+    private func switchAndRecord(_ target: Layout, from source: Layout, since startedAt: UInt64) -> Bool {
+        if source == target, currentLayout() == target { return true }
+        guard switchLayout(target), currentLayout() == target else { return false }
+        if source != target { onLayoutSwitched(source, target, startedAt) }
+        return true
     }
 
     private func mutationGuard(_ valid: @escaping ContextCheck) -> ContextCheck {

@@ -1,10 +1,13 @@
+import Combine
 import Foundation
 
 /// Персональный словарь слов-исключений (spec personal-dictionary).
 ///
 /// Персистентен (UserDefaults), сравнение без учёта регистра. Пополняется
 /// обучением на отменах (design D4) и вручную в настройках.
-public final class PersonalDictionary {
+public final class PersonalDictionary: ObservableObject {
+
+    public let objectWillChange = ObservableObjectPublisher()
 
     private static let userDefaultsKey = "personalDictionary.words"
 
@@ -26,11 +29,15 @@ public final class PersonalDictionary {
     public func add(_ word: String) {
         let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !trimmed.isEmpty, !contains(trimmed) else { return }
+        objectWillChange.send()
         defaults.set(words + [trimmed], forKey: Self.userDefaultsKey)
     }
 
     public func remove(_ word: String) {
         let needle = word.lowercased()
-        defaults.set(words.filter { $0.lowercased() != needle }, forKey: Self.userDefaultsKey)
+        let remaining = words.filter { $0.lowercased() != needle }
+        guard remaining != words else { return }
+        objectWillChange.send()
+        defaults.set(remaining, forKey: Self.userDefaultsKey)
     }
 }

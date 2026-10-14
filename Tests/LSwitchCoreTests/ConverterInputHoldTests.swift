@@ -14,7 +14,7 @@ final class ConverterInputHoldTests: XCTestCase {
         }
         let outcome = await fixture.converter.trigger()
         XCTAssertEqual(outcome, .converted(original: "ghbdtn", converted: "привет"))
-        XCTAssertEqual(fixture.actions, ["hold", "layout", "record", "release"])
+        XCTAssertEqual(fixture.actions, ["hold", "layout", "record", "sound", "release"])
         XCTAssertFalse(fixture.holdActive)
     }
 

@@ -34,7 +34,8 @@ final class ConverterTests: XCTestCase {
         let fixture = ConverterFixture()
         fixture.switchSucceeds = false
         fixture.succeed(fixture.axEngine)
-        _ = await fixture.converter.trigger()
+        let outcome = await fixture.converter.trigger()
+        XCTAssertEqual(outcome, .partiallyConverted(original: "ghbdtn", converted: "привет", targetLayout: .russian))
         XCTAssertTrue(fixture.transitions.isEmpty)
     }
 
@@ -42,8 +43,9 @@ final class ConverterTests: XCTestCase {
     func testAlreadyCorrectLayoutDoesNotCorrectQueuedInput() async {
         let fixture = ConverterFixture()
         fixture.succeed(fixture.axEngine, original: "руддщ", converted: "hello")
-        _ = await fixture.converter.trigger()
-        XCTAssertEqual(fixture.switchedTo, [.english])
+        let outcome = await fixture.converter.trigger()
+        XCTAssertEqual(outcome, .converted(original: "руддщ", converted: "hello"))
+        XCTAssertTrue(fixture.switchedTo.isEmpty)
         XCTAssertTrue(fixture.transitions.isEmpty)
     }
 

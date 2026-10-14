@@ -49,21 +49,33 @@ public enum PasteboardService {
         }
     }
 
-    /// SHA-256 (hex) по всем элементам буфера: типы каждого item
-    /// сортируются для детерминированности, порядок items значим.
+    /// SHA-256 по однозначно разделённым полям снимка. Длины отделяют type от data,
+    /// наличие данных различает nil и пустой Data; порядок items остаётся значимым.
     public static func fingerprint(of pasteboard: NSPasteboard) -> String {
         var hasher = SHA256()
-        for (index, item) in (pasteboard.pasteboardItems ?? []).enumerated() {
-            hasher.update(data: Data("item:\(index)".utf8))
-            for type in item.types.sorted(by: { $0.rawValue < $1.rawValue }) {
-                hasher.update(data: Data(type.rawValue.utf8))
+        let items = pasteboard.pasteboardItems ?? []
+        appendCount(items.count, to: &hasher)
+        for item in items {
+            let types = item.types.sorted(by: { $0.rawValue < $1.rawValue })
+            appendCount(types.count, to: &hasher)
+            for type in types {
+                let typeData = Data(type.rawValue.utf8)
+                appendCount(typeData.count, to: &hasher)
+                hasher.update(data: typeData)
                 if let data = item.data(forType: type) {
+                    hasher.update(data: Data([1]))
+                    appendCount(data.count, to: &hasher)
                     hasher.update(data: data)
+                } else {
+                    hasher.update(data: Data([0]))
                 }
-                hasher.update(data: Data([0]))
             }
         }
-        let digest = hasher.finalize()
-        return digest.map { String(format: "%02x", $0) }.joined()
+        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func appendCount(_ count: Int, to hasher: inout SHA256) {
+        var encoded = UInt64(count).bigEndian
+        withUnsafeBytes(of: &encoded) { hasher.update(data: Data($0)) }
     }
 }

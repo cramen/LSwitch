@@ -1,24 +1,36 @@
+import AppKit
+import Combine
 import LSwitchCore
-import ServiceManagement
 import SwiftUI
 
 /// Окно настроек MVP (spec settings). Открывается из menu bar.
+@MainActor
 struct SettingsView: View {
 
     @ObservedObject var settings: SettingsStore
     let appRules: AppRules
-    let personalDictionary: PersonalDictionary
+    @ObservedObject var personalDictionary: PersonalDictionary
 
     @State private var newBundleID = ""
     @State private var newExceptionWord = ""
-    @State private var launchAtLoginError: String?
-    /// Триггер перерисовки списка исключений (PersonalDictionary — не ObservableObject).
-    @State private var dictionaryVersion = 0
+    @StateObject private var launchAtLogin: LaunchAtLoginController
+
+    init(settings: SettingsStore, appRules: AppRules, personalDictionary: PersonalDictionary) {
+        self.settings = settings
+        self.appRules = appRules
+        self.personalDictionary = personalDictionary
+        _launchAtLogin = StateObject(wrappedValue: LaunchAtLoginController(settings: settings))
+    }
 
     var body: some View {
         Form {
             Toggle("LSwitch включён", isOn: $settings.enabled)
             Toggle("Автопереключение раскладки", isOn: $settings.autoSwitchEnabled)
+            Stepper(
+                "Отмен до добавления в исключения: \(settings.undoLearningThreshold)",
+                value: $settings.undoLearningThreshold,
+                in: AutoSwitchCoordinator.learningThresholdRange
+            )
             Toggle("Звук при конвертации", isOn: $settings.soundEnabled)
             Stepper(
                 "Окно отката: \(Int(settings.undoWindowSeconds)) с",
@@ -26,17 +38,31 @@ struct SettingsView: View {
                 in: 1...10,
                 step: 1
             )
-            Toggle("Запускать при входе", isOn: launchAtLoginBinding)
-            if let launchAtLoginError {
-                Text(launchAtLoginError)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-            }
+            launchAtLoginSection
             dictionarySection
             blockedAppsSection
         }
         .formStyle(.grouped)
         .frame(width: 420, height: 460)
+        .onAppear { launchAtLogin.refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            launchAtLogin.refresh()
+        }
+    }
+
+    private var launchAtLoginSection: some View {
+        Section {
+            Toggle("Запускать при входе", isOn: launchAtLoginBinding)
+            if let message = launchAtLogin.statusMessage {
+                Text(message).font(.caption).foregroundStyle(.secondary)
+            }
+            if launchAtLogin.status == .requiresApproval {
+                Button("Открыть «Объекты входа»") { launchAtLogin.openSystemSettings() }
+            }
+            if let message = launchAtLogin.errorMessage {
+                Text(message).font(.caption).foregroundStyle(.red)
+            }
+        }
     }
 
     private var dictionarySection: some View {
@@ -47,7 +73,6 @@ struct SettingsView: View {
                     Spacer()
                     Button("Удалить") {
                         personalDictionary.remove(word)
-                        dictionaryVersion += 1
                     }
                 }
             }
@@ -56,12 +81,10 @@ struct SettingsView: View {
                 Button("Добавить") {
                     personalDictionary.add(newExceptionWord)
                     newExceptionWord = ""
-                    dictionaryVersion += 1
                 }
                 .disabled(newExceptionWord.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .id(dictionaryVersion)
     }
 
     private var blockedAppsSection: some View {
@@ -94,22 +117,8 @@ struct SettingsView: View {
 
     private var launchAtLoginBinding: Binding<Bool> {
         Binding(
-            get: { settings.launchAtLogin },
-            set: { newValue in
-                do {
-                    if newValue {
-                        try SMAppService.mainApp.register()
-                    } else {
-                        try SMAppService.mainApp.unregister()
-                    }
-                    settings.launchAtLogin = newValue
-                    launchAtLoginError = nil
-                } catch {
-                    // Debug-бандл без подписи: регистрация может не работать —
-                    // показываем ошибку, не роняя приложение (design D6).
-                    launchAtLoginError = "Автозапуск недоступен: \(error.localizedDescription)"
-                }
-            }
+            get: { launchAtLogin.isRegistered },
+            set: { launchAtLogin.setEnabled($0) }
         )
     }
 }

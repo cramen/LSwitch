@@ -11,6 +11,7 @@ public final class SettingsStore: ObservableObject {
         static let soundEnabled = "settings.soundEnabled"
         static let launchAtLogin = "settings.launchAtLogin"
         static let autoSwitchEnabled = "settings.autoSwitchEnabled"
+        static let undoLearningThreshold = "settings.undoLearningThreshold"
     }
 
     @Published public var enabled: Bool {
@@ -36,6 +37,15 @@ public final class SettingsStore: ObservableObject {
         didSet { defaults.set(autoSwitchEnabled, forKey: Key.autoSwitchEnabled) }
     }
 
+    /// Число отмен до добавления слова в исключения. UI и сохранённые значения используют один диапазон.
+    @Published public var undoLearningThreshold: Int {
+        didSet {
+            let normalized = AutoSwitchCoordinator.normalizedLearningThreshold(undoLearningThreshold)
+            if undoLearningThreshold != normalized { undoLearningThreshold = normalized }
+            defaults.set(normalized, forKey: Key.undoLearningThreshold)
+        }
+    }
+
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -45,12 +55,17 @@ public final class SettingsStore: ObservableObject {
             Key.undoWindowSeconds: 3.0,
             Key.soundEnabled: true,
             Key.launchAtLogin: false,
-            Key.autoSwitchEnabled: false
+            Key.autoSwitchEnabled: false,
+            Key.undoLearningThreshold: AutoSwitchCoordinator.defaultLearningThreshold
         ])
         self.enabled = defaults.bool(forKey: Key.enabled)
         self.undoWindowSeconds = defaults.double(forKey: Key.undoWindowSeconds)
         self.soundEnabled = defaults.bool(forKey: Key.soundEnabled)
         self.launchAtLogin = defaults.bool(forKey: Key.launchAtLogin)
         self.autoSwitchEnabled = defaults.bool(forKey: Key.autoSwitchEnabled)
+        self.undoLearningThreshold = AutoSwitchCoordinator.normalizedLearningThreshold(
+            defaults.integer(forKey: Key.undoLearningThreshold)
+        )
+        defaults.set(undoLearningThreshold, forKey: Key.undoLearningThreshold)
     }
 }

@@ -2,7 +2,7 @@
 # поэтому используем toolchain полного Xcode напрямую.
 export DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
 
-.PHONY: build test run lint app run-app
+.PHONY: build test run lint app run-app run-app-refuse-ru run-app-refuse-en
 
 APP_DIR := .build/LSwitch.app
 
@@ -35,3 +35,11 @@ app:
 
 run-app: app
 	open $(APP_DIR)
+
+# Перед сменой режима завершить предыдущий экземпляр. Аргумент действует
+# только в debug-сборке; после приёмки запускать обычный run-app.
+run-app-refuse-ru: app
+	open $(APP_DIR) --args --test-refuse-layout=ru
+
+run-app-refuse-en: app
+	open $(APP_DIR) --args --test-refuse-layout=en

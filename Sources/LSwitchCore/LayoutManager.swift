@@ -48,6 +48,8 @@ public final class LayoutManager {
 
     /// Переключает системную раскладку на целевую. Возвращает false, если
     /// подходящий источник не найден или переключение не подтвердилось.
+    /// true подтверждает текущий источник, а не только принятие команды TIS.
+    /// false не отменяет уже выполненную текстовую замену: оркестратор сообщает частичный результат.
     @discardableResult
     public func switchTo(_ layout: Layout) -> Bool {
         guard currentLayout() != layout else { return true }

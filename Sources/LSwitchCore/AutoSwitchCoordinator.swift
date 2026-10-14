@@ -2,17 +2,36 @@ import Foundation
 
 /// Координатор автопереключения (design D3, D4): решает, конвертировать
 /// ли последнее слово после разделителя, и реализует обучение на отменах.
-/// Вызывается из очереди обработки перехвата и из Task конвертации —
-/// внутреннее состояние защищено замком.
+/// Интеграция вызывает оценку, отмену и обновление настройки на главном потоке;
+/// внутреннее состояние дополнительно защищено замком для независимого использования.
 public final class AutoSwitchCoordinator: @unchecked Sendable {
 
     /// Порог обучения: столько отмен автоконвертации слова отправляют его
     /// в персональный словарь (TZ.md F11, по умолчанию 2).
-    public static let learningThreshold = 2
+    public static let defaultLearningThreshold = 2
+    public static let learningThresholdRange = 1...10
 
     private let classifier: WordClassifier
     private let personalDictionary: PersonalDictionary
     private let lock = NSLock()
+    private var threshold: Int
+
+    public var learningThreshold: Int {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return threshold
+        }
+        set {
+            lock.lock()
+            threshold = Self.normalizedLearningThreshold(newValue)
+            lock.unlock()
+        }
+    }
+
+    public static func normalizedLearningThreshold(_ value: Int) -> Int {
+        min(max(value, learningThresholdRange.lowerBound), learningThresholdRange.upperBound)
+    }
 
     /// Счётчик отмен по нормализованному слову (нижний регистр), в памяти.
     private var undoCounts: [String: Int] = [:]
@@ -22,10 +41,12 @@ public final class AutoSwitchCoordinator: @unchecked Sendable {
 
     public init(
         classifier: WordClassifier = WordClassifier(),
-        personalDictionary: PersonalDictionary = PersonalDictionary()
+        personalDictionary: PersonalDictionary = PersonalDictionary(),
+        learningThreshold: Int = AutoSwitchCoordinator.defaultLearningThreshold
     ) {
         self.classifier = classifier
         self.personalDictionary = personalDictionary
+        self.threshold = Self.normalizedLearningThreshold(learningThreshold)
     }
 
     /// Вызывается на разделителе. Возвращает конвертированный вариант,
@@ -46,7 +67,7 @@ public final class AutoSwitchCoordinator: @unchecked Sendable {
         guard let word = lastAutoConvertedWord else { return }
         let key = word.lowercased()
         let count = (undoCounts[key] ?? 0) + 1
-        if count >= Self.learningThreshold {
+        if count >= threshold {
             personalDictionary.add(key)
             undoCounts[key] = nil
         } else {

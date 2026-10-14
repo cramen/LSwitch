@@ -15,9 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let logger = Logger(subsystem: "LSwitch", category: "App")
 
-    private var statusItem: NSStatusItem!
-    private var toggleItem: NSMenuItem!
-    private var permissionsItem: NSMenuItem!
+    private lazy var statusMenu = StatusMenuController()
+    private let permissionNotice = PermissionNoticeController()
     private var settingsWindow: NSWindow?
 
     private let settings = SettingsStore()
@@ -28,13 +27,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let permGuard = PermGuard()
     private let keystrokeBuffer = KeystrokeBuffer()
     private let classifier = KeystrokeClassifier()
-    private let autoSwitch = AutoSwitchCoordinator()
+    private lazy var autoSwitch = AutoSwitchCoordinator(
+        classifier: WordClassifier(personalDictionary: personalDictionary), personalDictionary: personalDictionary
+    )
     private let appProfiles = AppProfiles()
     private var detector = DoubleShiftDetector()
     private var eventTap: EventTapCore?
     private var inputHoldingTap: EventTapCore?
     private lazy var converter = makeConverter()
     private var inputGeneration: UInt64 = 0
+    private var interceptionGeneration: UInt64 = 0
 
     private var workspaceObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
@@ -53,10 +55,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.$undoWindowSeconds
             .assign(to: \.window, on: undoStore)
             .store(in: &cancellables)
+        settings.$undoLearningThreshold
+            .assign(to: \.learningThreshold, on: autoSwitch)
+            .store(in: &cancellables)
         settings.$enabled.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] enabled in
             guard let self else { return }
+            self.permGuard.checkNow()
             if enabled { self.startInterception() } else { self.stopInterception() }
-            self.updateToggleItem()
+            self.refreshMenuStatus()
         }.store(in: &cancellables)
         logger.info("TIS источники: \(self.layoutManager.enabledSourceIDs())")
     }
@@ -70,9 +76,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Перехват → детект → конвертация
 
     private func startInterception() {
-        guard eventTap == nil, settings.enabled else { return }
+        guard eventTap == nil, settings.enabled, permGuard.current.allGranted else { return }
+        interceptionGeneration &+= 1
+        let generation = interceptionGeneration
         let tap = EventTapCore { [weak self] raw in
-            DispatchQueue.main.async { self?.handleIntercepted(raw) }
+            DispatchQueue.main.async {
+                guard let self, self.interceptionGeneration == generation, self.eventTap != nil else { return }
+                self.handleIntercepted(raw)
+            }
         }
         guard tap.start() else {
             logger.error("Event tap не запущен — нет разрешений?")
@@ -82,6 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopInterception() {
+        interceptionGeneration &+= 1
         resetInputContext()
         eventTap?.stop()
         eventTap = nil
@@ -90,7 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Callback tap передаёт сюда события на главный поток.
     private func handleIntercepted(_ raw: RawKeyEvent) {
         guard !raw.isSynthetic else { return }
-        guard settings.enabled, raw.type != .other,
+        guard settings.enabled, permGuard.current.allGranted, eventTap != nil, raw.type != .other,
               !appRules.isBlocked(bundleID: currentFrontmostBundleID()),
               let target = InputSafety.captureTarget() else {
             resetInputContext()
@@ -104,13 +116,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { [converter, autoSwitch] in
                 guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
                 let outcome = await converter.trigger(expectedWord: word.isEmpty ? nil : word)
-                if case .undone = outcome {
+                switch outcome {
+                case .undone, .partiallyUndone:
                     // Откат автоконвертации — сигнал обучения (design D4).
                     autoSwitch.registerUndo()
-                } else if case .converted = outcome {
+                    self.keystrokeBuffer.clear()
+                case .converted, .partiallyConverted:
                     autoSwitch.clearPendingUndoCandidate()
                     self.keystrokeBuffer.clear()
+                default:
+                    break
                 }
+                self.statusMenu.showOutcome(outcome)
                 self.logger.info("Хоткей: \(outcome.label, privacy: .public)")
             }
             return
@@ -154,11 +171,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 expectedWord: context.word, trailingText: context.trailingText, allowUndo: false
             )
             switch outcome {
-            case .converted:
+            case .converted, .partiallyConverted:
                 self.keystrokeBuffer.clear()
             default:
                 autoSwitch.clearPendingUndoCandidate()
             }
+            self.statusMenu.showOutcome(outcome)
             self.logger.info("Автоконвертация: \(outcome.label, privacy: .public)")
         }
     }
@@ -173,11 +191,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func makeConverter() -> Converter {
         Converter(
-            layoutManager: layoutManager,
+            currentLayout: { [layoutManager] in layoutManager.currentLayout() },
+            switchLayout: { [layoutManager] layout in
+                #if DEBUG
+                let direction = layout == .russian ? "ru" : "en"
+                if CommandLine.arguments.contains("--test-refuse-layout=\(direction)") { return false }
+                #endif
+                return layoutManager.switchTo(layout)
+            },
             appRules: appRules,
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
             prefersClipboard: { [appProfiles] in appProfiles.prefersClipboard(bundleID: $0) },
+            makeAXEngine: { AXConversionEngine() },
+            makeClipboardEngine: { ClipboardConversionEngine() },
             beginInputHold: { [weak self] in
                 guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
                 self.inputHoldingTap = tap
@@ -203,27 +230,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - PermGuard
 
     private func setupPermGuard() {
-        permGuard.onPermissionsLost = { [weak self] _ in
+        permGuard.onPermissionsLost = { [weak self] status in
             guard let self else { return }
-            self.logger.notice("Разрешения потеряны — перехват остановлен")
-            DispatchQueue.main.async { self.stopInterception() }
+            self.logger.notice("Не хватает разрешений — перехват остановлен")
+            self.stopInterception()
+            self.permissionNotice.show(status)
         }
         permGuard.onPermissionsRestored = { [weak self] in
             guard let self else { return }
-            self.logger.notice("Разрешения восстановлены — перехват запущен")
-            DispatchQueue.main.async { self.startInterception() }
+            self.logger.notice("Разрешения восстановлены")
+            self.startInterception()
+        }
+        permGuard.onStatusChanged = { [weak self] status in
+            self?.permissionNotice.update(status)
+            self?.refreshMenuStatus()
         }
         permGuard.start()
     }
 
     private func requestPermissionsIfNeeded() {
-        if !AXIsProcessTrusted() {
-            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
-            _ = AXIsProcessTrustedWithOptions(options)
-        }
-        if !CGPreflightListenEventAccess() {
-            _ = CGRequestListenEventAccess()
-        }
+        permissionNotice.show(permGuard.current)
     }
 
     /// Смена приложения завершает прежний контекст ввода и отмены.
@@ -240,52 +266,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Меню
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.button?.title = "LS"
-
-        let menu = NSMenu()
-        menu.delegate = self
-
-        toggleItem = NSMenuItem(title: "", action: #selector(toggleEnabled), keyEquivalent: "e")
-        toggleItem.target = self
-        menu.addItem(toggleItem)
-
-        permissionsItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
-        permissionsItem.isEnabled = false
-        menu.addItem(permissionsItem)
-
-        menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Настройки…", action: #selector(openSettings), keyEquivalent: ",")
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(
-            title: "Выйти из LSwitch",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        ))
-
-        statusItem.menu = menu
-        updateToggleItem()
-        updatePermissionsItem()
+        statusMenu.onToggle = { [weak self] in self?.settings.enabled.toggle() }
+        statusMenu.onSettings = { [weak self] in self?.openSettings() }
+        statusMenu.onPermissions = { [weak self] in
+            guard let self else { return }
+            self.permGuard.checkNow()
+            self.permissionNotice.show(self.permGuard.current, force: true)
+        }
+        statusMenu.onRefresh = { [weak self] in
+            self?.permGuard.checkNow()
+            self?.refreshMenuStatus()
+        }
+        refreshMenuStatus()
     }
 
-    private func updateToggleItem() {
-        toggleItem?.title = settings.enabled ? "Выключить LSwitch" : "Включить LSwitch"
-        statusItem?.button?.title = settings.enabled ? "LS" : "L̶S̶"
-    }
-
-    private func updatePermissionsItem() {
-        let status = PermGuard.poll()
-        let axMark = status.accessibility ? "✓" : "✗"
-        let imMark = status.inputMonitoring ? "✓" : "✗"
-        permissionsItem?.title = "Разрешения — Доступ: \(axMark), Мониторинг ввода: \(imMark)"
-    }
-
-    @objc private func toggleEnabled() {
-        settings.enabled.toggle()
+    private func refreshMenuStatus() {
+        statusMenu.update(enabled: settings.enabled, status: permGuard.current)
     }
 
     @objc private func openSettings() {
@@ -305,12 +301,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // LSUIElement-агент: активируем принудительно, иначе окно не получит фокус.
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-    }
-}
-
-extension AppDelegate: NSMenuDelegate {
-    func menuWillOpen(_ menu: NSMenu) {
-        updatePermissionsItem()
     }
 }
 

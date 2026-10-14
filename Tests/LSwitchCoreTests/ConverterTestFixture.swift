@@ -29,6 +29,9 @@ final class ConverterFixture {
     var layout: Layout? = .english
     var switchedTo: [Layout] = []
     var switchSucceeds = true
+    var appliesRequestedLayout = true
+    var switchHandler: ((Layout) -> Bool)?
+    var convertedNotifications = 0
     var transitions: [Transition] = []
     var holdAllowed = true
     var holdActive = false
@@ -46,9 +49,12 @@ final class ConverterFixture {
     lazy var converter = Converter(
         currentLayout: { [weak self] in self?.layout },
         switchLayout: { [weak self] target in
-            self?.actions.append("layout")
-            self?.switchedTo.append(target)
-            if self?.switchSucceeds == true { self?.layout = target }
+            guard let self else { return false }
+            self.actions.append("layout")
+            self.switchedTo.append(target)
+            if let switchHandler = self.switchHandler { return switchHandler(target) }
+            if self.switchSucceeds && self.appliesRequestedLayout { self.layout = target }
+            return self.switchSucceeds
         },
         appRules: rules, undoStore: undoStore,
         frontmostBundleID: { [weak self] in self?.bundleID },
@@ -73,6 +79,10 @@ final class ConverterFixture {
         onLayoutSwitched: { [weak self] source, target, startedAt in
             self?.actions.append("record")
             self?.transitions.append(Transition(source: source, target: target, startedAt: startedAt))
+        },
+        onConverted: { [weak self] in
+            self?.actions.append("sound")
+            self?.convertedNotifications += 1
         }
     )
 
