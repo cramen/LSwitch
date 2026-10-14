@@ -68,8 +68,8 @@ public final class KeystrokeBuffer: @unchecked Sendable {
         defer { lock.unlock() }
         var word: [Character] = []
         for keystroke in storage.reversed() {
-            guard case .character(let ch) = keystroke.kind else { break }
-            word.append(ch)
+            guard case .character(let letter) = keystroke.kind else { break }
+            word.append(letter)
         }
         return String(word.reversed())
     }

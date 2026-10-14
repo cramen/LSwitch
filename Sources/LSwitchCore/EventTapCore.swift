@@ -163,7 +163,7 @@ public final class EventTapCore {
         let center = NSWorkspace.shared.notificationCenter
         let names: [Notification.Name] = [
             NSWorkspace.didWakeNotification,
-            NSWorkspace.sessionDidBecomeActiveNotification,
+            NSWorkspace.sessionDidBecomeActiveNotification
         ]
         for name in names {
             let observer = center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in

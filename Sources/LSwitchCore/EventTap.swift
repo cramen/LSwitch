@@ -83,7 +83,7 @@ public struct KeystrokeClassifier: Sendable {
         53, // Escape
         117, // Forward Delete
         123, 124, 125, 126, // стрелки
-        115, 119, 116, 121, // Home, End, PageUp, PageDown
+        115, 119, 116, 121 // Home, End, PageUp, PageDown
     ]
 
     public init() {}

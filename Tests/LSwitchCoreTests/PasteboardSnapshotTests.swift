@@ -1,6 +1,6 @@
 import AppKit
-import XCTest
 @testable import LSwitchCore
+import XCTest
 
 final class PasteboardSnapshotTests: XCTestCase {
 

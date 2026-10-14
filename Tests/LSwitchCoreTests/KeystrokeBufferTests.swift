@@ -1,5 +1,5 @@
-import XCTest
 @testable import LSwitchCore
+import XCTest
 
 final class KeystrokeBufferTests: XCTestCase {
 
@@ -10,11 +10,11 @@ final class KeystrokeBufferTests: XCTestCase {
     }
 
     private func type(_ text: String) {
-        for ch in text {
-            if ch == " " || ch == "," || ch == "." || ch == "\n" {
-                buffer.append(Keystroke(kind: .delimiter(ch)))
+        for letter in text {
+            if letter == " " || letter == "," || letter == "." || letter == "\n" {
+                buffer.append(Keystroke(kind: .delimiter(letter)))
             } else {
-                buffer.append(Keystroke(kind: .character(ch)))
+                buffer.append(Keystroke(kind: .character(letter)))
             }
         }
     }
@@ -63,7 +63,7 @@ final class KeystrokeBufferTests: XCTestCase {
 
     func testThreadSafety() {
         let iterations = 1000
-        DispatchQueue.concurrentPerform(iterations: iterations) { i in
+        DispatchQueue.concurrentPerform(iterations: iterations) { _ in
             self.buffer.append(Keystroke(kind: .character("x")))
             _ = self.buffer.lastWord()
         }

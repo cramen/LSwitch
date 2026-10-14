@@ -36,7 +36,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.button?.title = "LS"
 
         let menu = NSMenu()
+        addToggleItem(to: menu)
+        menu.addItem(.separator())
+        addSpikeItems(to: menu)
+        menu.addItem(.separator())
+        addUtilityItems(to: menu)
 
+        statusItem.menu = menu
+        updateToggleItem()
+    }
+
+    private func addToggleItem(to menu: NSMenu) {
         toggleItem = NSMenuItem(
             title: "",
             action: #selector(toggleEnabled),
@@ -44,62 +54,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         toggleItem.target = self
         menu.addItem(toggleItem)
+    }
 
-        menu.addItem(.separator())
+    private func addSpikeItems(to menu: NSMenu) {
         menu.addItem(makeInfoItem("— Спайки (этап 0) —"))
-
-        spikeTapItem = NSMenuItem(
-            title: "Спайк: перехват клавиатуры",
-            action: #selector(toggleSpikeTap),
-            keyEquivalent: "t"
+        spikeTapItem = makeActionItem(
+            title: "Спайк: перехват клавиатуры", action: #selector(toggleSpikeTap), key: "t"
         )
-        spikeTapItem.target = self
         menu.addItem(spikeTapItem)
+        menu.addItem(makeActionItem(
+            title: "Спайк: конвертация через AX", action: #selector(runAXConversion), key: "a"
+        ))
+        menu.addItem(makeActionItem(
+            title: "Спайк: конвертация через буфер", action: #selector(runClipboardConversion), key: "c"
+        ))
+        menu.addItem(makeActionItem(
+            title: "Статус спайков…", action: #selector(showSpikeStats), key: "i"
+        ))
+    }
 
-        let axItem = NSMenuItem(
-            title: "Спайк: конвертация через AX",
-            action: #selector(runAXConversion),
-            keyEquivalent: "a"
-        )
-        axItem.target = self
-        menu.addItem(axItem)
-
-        let clipboardItem = NSMenuItem(
-            title: "Спайк: конвертация через буфер",
-            action: #selector(runClipboardConversion),
-            keyEquivalent: "c"
-        )
-        clipboardItem.target = self
-        menu.addItem(clipboardItem)
-
-        let statsItem = NSMenuItem(
-            title: "Статус спайков…",
-            action: #selector(showSpikeStats),
-            keyEquivalent: "i"
-        )
-        statsItem.target = self
-        menu.addItem(statsItem)
-
+    private func addUtilityItems(to menu: NSMenu) {
+        menu.addItem(makeActionItem(
+            title: "Настройки…", action: #selector(openSettings), key: ","
+        ))
         menu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(
-            title: "Настройки…",
-            action: #selector(openSettings),
-            keyEquivalent: ","
-        )
-        settingsItem.target = self
-        menu.addItem(settingsItem)
-
-        menu.addItem(.separator())
-
         menu.addItem(NSMenuItem(
             title: "Выйти из LSwitch",
             action: #selector(NSApplication.terminate(_:)),
             keyEquivalent: "q"
         ))
+    }
 
-        statusItem.menu = menu
-        updateToggleItem()
+    private func makeActionItem(title: String, action: Selector, key: String) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
     }
 
     private func makeInfoItem(_ title: String) -> NSMenuItem {
@@ -234,8 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        // TODO(этап 1.5): SwiftUI-окно настроек
+        // Заглушка до этапа 1.5: SwiftUI-окно настроек.
     }
+}
+
+if CommandLine.arguments.contains("--probe") {
+    Probe.run()
 }
 
 let app = NSApplication.shared

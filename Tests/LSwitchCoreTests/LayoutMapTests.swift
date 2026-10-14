@@ -1,5 +1,5 @@
-import XCTest
 @testable import LSwitchCore
+import XCTest
 
 final class LayoutMapTests: XCTestCase {
 
@@ -51,10 +51,10 @@ final class LayoutMapTests: XCTestCase {
 
     func testEveryLetterRoundTrips() {
         let russianAlphabet = "абвгдеёжзийклмнопрстуфхцчшщъыьэюя"
-        for ch in russianAlphabet {
-            let en = map.convert(String(ch), from: .russian, to: .english)
-            XCTAssertEqual(map.convert(en, from: .english, to: .russian), String(ch),
-                           "Буква \(ch) не выдерживает round-trip")
+        for letter in russianAlphabet {
+            let english = map.convert(String(letter), from: .russian, to: .english)
+            XCTAssertEqual(map.convert(english, from: .english, to: .russian), String(letter),
+                           "Буква \(letter) не выдерживает round-trip")
         }
     }
 }

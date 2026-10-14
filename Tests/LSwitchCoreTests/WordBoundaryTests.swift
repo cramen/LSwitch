@@ -1,5 +1,5 @@
-import XCTest
 @testable import LSwitchCore
+import XCTest
 
 final class WordBoundaryTests: XCTestCase {
 

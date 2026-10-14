@@ -1,6 +1,6 @@
 import CoreGraphics
-import XCTest
 @testable import LSwitchCore
+import XCTest
 
 final class SyntheticEventMarkerTests: XCTestCase {
 

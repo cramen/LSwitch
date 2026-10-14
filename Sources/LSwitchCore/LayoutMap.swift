@@ -43,22 +43,22 @@ public struct LayoutMap: Sendable {
             ("`", "ё"), ("~", "Ё"),
             ("/", "."), ("?", ","),
             // Цифровой ряд со Shift (русская раскладка)
-            ("@", "\""), ("#", "№"), ("$", ";"), ("^", ":"), ("&", "?"),
+            ("@", "\""), ("#", "№"), ("$", ";"), ("^", ":"), ("&", "?")
         ]
 
         var enToRu: [Character: Character] = [:]
         var ruToEn: [Character: Character] = [:]
-        for (en, ru) in pairs {
-            enToRu[en] = ru
-            ruToEn[ru] = en
+        for (english, russian) in pairs {
+            enToRu[english] = russian
+            ruToEn[russian] = english
             // Регистры для букв. Обе стороны обязаны меняться в верхний регистр:
             // иначе для пунктуационных клавиш ("]"→"ъ") верхний регистр en
             // совпадает с исходным символом и затирает базовую пару.
-            let enUpper = Character(en.uppercased())
-            let ruUpper = Character(ru.uppercased())
-            if enUpper != en, ruUpper != ru {
-                enToRu[enUpper] = ruUpper
-                ruToEn[ruUpper] = enUpper
+            let englishUpper = Character(english.uppercased())
+            let russianUpper = Character(russian.uppercased())
+            if englishUpper != english, russianUpper != russian {
+                enToRu[englishUpper] = russianUpper
+                ruToEn[russianUpper] = englishUpper
             }
         }
         self.enToRu = enToRu
@@ -67,8 +67,8 @@ public struct LayoutMap: Sendable {
 
     /// Конвертирует строку из раскладки `from` в раскладку `to`.
     /// Символы без соответствия (пробелы, цифры, unicode) сохраняются как есть.
-    public func convert(_ text: String, from: Layout, to: Layout) -> String {
-        precondition(from != to, "Раскладки должны отличаться")
+    public func convert(_ text: String, from: Layout, to target: Layout) -> String {
+        precondition(from != target, "Раскладки должны отличаться")
         let table = (from == .english) ? enToRu : ruToEn
         return String(text.map { table[$0] ?? $0 })
     }
