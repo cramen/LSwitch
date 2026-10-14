@@ -48,8 +48,12 @@ public final class ClipboardConverter {
         self.transform = transform
     }
 
-    /// Выполняет конвертацию выделения в активном приложении.
+    /// Выполняет конвертацию последнего слова перед курсором через буфер.
     /// Буфер обмена восстанавливается при любом исходе.
+    ///
+    /// Слово всегда сначала выделяется через ⌥⇧←: в Electron-редакторах
+    /// (Obsidian, VS Code) Cmd+C без выделения копирует всю строку, и слепое
+    /// копирование приводило к дублированию («ghbdtn привет»).
     @discardableResult
     public func convertSelection(pasteboard: NSPasteboard = .general) async -> Outcome {
         let snapshot = PasteboardService.capture(from: pasteboard)
@@ -62,21 +66,13 @@ public final class ClipboardConverter {
             logger.info("Буфер восстановлен, fingerprint совпадает: \(restored)")
         }
 
+        // Пауза на возврат фокуса из меню, затем выделяем слово слева.
+        try? await Task.sleep(nanoseconds: UInt64(configuration.preCopyDelay * 1_000_000_000))
+        postSelectWordLeft()
+        try? await Task.sleep(nanoseconds: UInt64(configuration.writeDelay * 1_000_000_000))
+
         var delay = configuration.initialReadDelay
         for attempt in 1...configuration.maxAttempts {
-            // Первая попытка ждёт возврата фокуса из меню, повторы — удвоенную паузу чтения.
-            let waitBeforeCopy = attempt == 1 ? configuration.preCopyDelay : 0
-            if waitBeforeCopy > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(waitBeforeCopy * 1_000_000_000))
-            }
-            if attempt == 2 {
-                // Выделения нет (Cmd+C ничего не дал) — выделяем последнее
-                // слово курсорной комбинацией ⌥⇧← и пробуем снова. Так
-                // clipboard-режим работает и для слова перед курсором,
-                // что критично для Electron (Obsidian, VS Code), где AX-запись
-                // молча вставляет текст вместо замены.
-                postSelectWordLeft()
-            }
             let changeCountBefore = pasteboard.changeCount
             postShortcut(virtualKey: 0x08) // kVK_ANSI_C
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
