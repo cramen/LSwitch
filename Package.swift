@@ -6,7 +6,7 @@ let package = Package(
     platforms: [.macOS(.v13)],
     products: [
         .library(name: "LSwitchCore", targets: ["LSwitchCore"]),
-        .executable(name: "lswitch", targets: ["LSwitch"]),
+        .executable(name: "lswitch", targets: ["LSwitch"])
     ],
     targets: [
         .target(name: "LSwitchCore"),
@@ -17,6 +17,6 @@ let package = Package(
         .testTarget(
             name: "LSwitchCoreTests",
             dependencies: ["LSwitchCore"]
-        ),
+        )
     ]
 )
