@@ -181,9 +181,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updatePermissionsItem() {
         let status = PermGuard.poll()
-        let ax = status.accessibility ? "✓" : "✗"
-        let im = status.inputMonitoring ? "✓" : "✗"
-        permissionsItem?.title = "Разрешения — Доступ: \(ax), Мониторинг ввода: \(im)"
+        let axMark = status.accessibility ? "✓" : "✗"
+        let imMark = status.inputMonitoring ? "✓" : "✗"
+        permissionsItem?.title = "Разрешения — Доступ: \(axMark), Мониторинг ввода: \(imMark)"
     }
 
     @objc private func toggleEnabled() {
