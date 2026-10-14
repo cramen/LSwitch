@@ -122,7 +122,27 @@ public final class AXTextConverter {
             return .failure(.writeFailed)
         }
         let word = String(value[wordRange])
-        return replaceSelection(word, in: element, wasSelection: false)
+        let result = replaceSelection(word, in: element, wasSelection: false)
+        // Electron и часть кастомных редакторов отвечают «успех», но вставляют
+        // текст у курсора вместо замены диапазона (спайк P0.2, Obsidian).
+        // Проверяем результат чтением: слово должно оказаться на своём месте.
+        if case .success(let outcome) = result,
+           !verifyWritten(outcome.converted, at: wordNSRange.location, in: element) {
+            return .failure(.writeFailed)
+        }
+        return result
+    }
+
+    /// Проверка, что слово реально записалось в позицию `location` (UTF-16).
+    /// Если значение перечитать нельзя — верим записи (нечем проверить).
+    private func verifyWritten(_ expected: String, at location: Int, in element: AXUIElement) -> Bool {
+        guard let newValue = copyStringAttribute(kAXValueAttribute, from: element) else { return true }
+        let utf16 = newValue.utf16
+        let end = location + expected.utf16.count
+        guard location >= 0, end <= utf16.count else { return false }
+        let startIndex = utf16.index(utf16.startIndex, offsetBy: location)
+        let endIndex = utf16.index(utf16.startIndex, offsetBy: end)
+        return String(utf16[startIndex..<endIndex]) == expected
     }
 
     private func replaceSelection(

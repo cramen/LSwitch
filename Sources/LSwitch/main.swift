@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     autoSwitch.registerUndo()
                 } else if case .converted = outcome {
                     autoSwitch.clearPendingUndoCandidate()
-                    self.keystrokeBuffer.removeLastWord()
+                    self.keystrokeBuffer.clear()
                 }
                 self.logger.info("Хоткей: \(String(describing: outcome))")
             }
@@ -120,7 +120,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let outcome = await converter.trigger(allowUndo: false)
             switch outcome {
             case .converted:
-                self.keystrokeBuffer.removeLastWord()
+                self.keystrokeBuffer.clear()
             case .failed:
                 autoSwitch.clearPendingUndoCandidate()
             default:

@@ -69,6 +69,14 @@ public final class ClipboardConverter {
             if waitBeforeCopy > 0 {
                 try? await Task.sleep(nanoseconds: UInt64(waitBeforeCopy * 1_000_000_000))
             }
+            if attempt == 2 {
+                // Выделения нет (Cmd+C ничего не дал) — выделяем последнее
+                // слово курсорной комбинацией ⌥⇧← и пробуем снова. Так
+                // clipboard-режим работает и для слова перед курсором,
+                // что критично для Electron (Obsidian, VS Code), где AX-запись
+                // молча вставляет текст вместо замены.
+                postSelectWordLeft()
+            }
             let changeCountBefore = pasteboard.changeCount
             postShortcut(virtualKey: 0x08) // kVK_ANSI_C
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -97,12 +105,21 @@ public final class ClipboardConverter {
 
     /// Синтезирует Cmd+<key> с меткой собственного события.
     private func postShortcut(virtualKey: UInt16) {
+        postKey(virtualKey: virtualKey, flags: .maskCommand)
+    }
+
+    /// ⌥⇧← — выделить слово слева от курсора.
+    private func postSelectWordLeft() {
+        postKey(virtualKey: 0x7B, flags: [.maskAlternate, .maskShift])
+    }
+
+    private func postKey(virtualKey: UInt16, flags: CGEventFlags) {
         let source = CGEventSource(stateID: .hidSystemState)
         for keyDown in [true, false] {
             guard let event = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: keyDown) else {
                 continue
             }
-            event.flags = .maskCommand
+            event.flags = flags
             SyntheticEventMarker.tag(event)
             event.post(tap: .cghidEventTap)
         }
