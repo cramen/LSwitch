@@ -20,15 +20,16 @@ lint:
 
 # .app-бандл для ручной проверки спайков: разрешения TCC выдаются только
 # бандлу с собственной идентичностью, а не голому бинарнику из терминала.
-# Ad-hoc подпись с фиксированным identifier; НЕ пересобирай между выдачей
-# разрешений и проверками — сигнатура изменится, и разрешения слетят.
+# Подпись self-signed сертификатом "LSwitch Dev" (dev-сертификат в login
+# keychain): designated requirement привязан к сертификату, поэтому
+# разрешения TCC ПЕРЕЖИВАЮТ пересборку — в отличие от ad-hoc (cdhash).
 app:
 	swift build -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
 		-Xlinker $(CURDIR)/packaging/Info.plist
 	mkdir -p $(APP_DIR)/Contents/MacOS
 	cp .build/debug/lswitch $(APP_DIR)/Contents/MacOS/LSwitch
 	cp packaging/Info.plist $(APP_DIR)/Contents/
-	codesign --force --sign - --identifier ru.cramen.lswitch $(APP_DIR)
+	codesign --force --sign "LSwitch Dev" --identifier ru.cramen.lswitch $(APP_DIR)
 
 run-app: app
 	open $(APP_DIR)
