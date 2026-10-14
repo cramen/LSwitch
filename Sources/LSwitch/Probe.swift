@@ -1,6 +1,7 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import LSwitchCore
 
 /// Диагностический прогон спайка: `lswitch --probe`.
 ///
@@ -59,6 +60,20 @@ enum Probe {
             &focused
         )
         print("AX чтение focused element: \(axResult == .success ? "ок" : "ошибка \(axResult.rawValue)")")
+
+        // Проверка LayoutManager: чтение, круговое переключение и возврат.
+        let layoutManager = LayoutManager()
+        print("TIS источники: \(layoutManager.enabledSourceIDs())")
+        let before = layoutManager.currentLayout()
+        print("текущая раскладка: \(before.map { $0.rawValue } ?? "неизвестна (\(layoutManager.currentSourceID() ?? "?"))")")
+        if let before {
+            let target = before.opposite
+            let switched = layoutManager.switchTo(target)
+            let afterSwitch = layoutManager.currentLayout()
+            let restored = layoutManager.switchTo(before)
+            print("переключение → \(target.rawValue): \(switched && afterSwitch == target ? "ок" : "НЕУДАЧА"), "
+                + "возврат: \(restored ? "ок" : "НЕУДАЧА")")
+        }
         exit(0)
     }
 
