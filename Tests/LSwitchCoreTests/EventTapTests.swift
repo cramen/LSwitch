@@ -233,7 +233,6 @@ final class EventTapCoreIntegrationTests: XCTestCase {
     }
 }
 
-
 /// Callback пишет с processingQueue; XCTest читает только под тем же замком.
 private final class DeliveredKeyUps: @unchecked Sendable {
     enum Kind { case ordinary, marked }

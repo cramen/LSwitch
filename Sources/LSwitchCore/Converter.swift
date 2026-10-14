@@ -233,7 +233,13 @@ public final class Converter {
         ))
         undoContext = valid
         let target = request.targetLayout(for: receipt.original) ?? layout.opposite
-        guard switchAndRecord(target, from: layout, since: startedAt) else {
+        return finishConversion(receipt, target: target, source: layout, since: startedAt)
+    }
+
+    private func finishConversion(
+        _ receipt: ConversionReceipt, target: Layout, source: Layout, since startedAt: UInt64
+    ) -> Outcome {
+        guard switchAndRecord(target, from: source, since: startedAt) else {
             return .partiallyConverted(original: receipt.original, converted: receipt.converted, targetLayout: target)
         }
         onConverted()
