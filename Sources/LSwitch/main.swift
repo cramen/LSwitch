@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let keystrokeBuffer = KeystrokeBuffer()
     private let classifier = KeystrokeClassifier()
     private let autoSwitch = AutoSwitchCoordinator()
+    private let appProfiles = AppProfiles()
     private var detector = DoubleShiftDetector()
     private var eventTap: EventTapCore?
     private lazy var converter = makeConverter()
@@ -136,6 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appRules: appRules,
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
+            prefersClipboard: { [appProfiles] in appProfiles.prefersClipboard(bundleID: $0) },
             onConverted: { [weak self] in
                 guard let self, self.settings.soundEnabled else { return }
                 DispatchQueue.main.async {

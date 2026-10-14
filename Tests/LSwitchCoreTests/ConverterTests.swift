@@ -78,7 +78,26 @@ final class ConverterTests: XCTestCase {
     func testBothEnginesFail() async {
         let outcome = await converter.trigger()
         XCTAssertEqual(outcome, .failed)
-        XCTAssertNil(converter.modeCache["com.example.TextEdit"])
+        // Провал AX запоминается как «ненадёжен» — повторных попыток AX нет,
+        // чтобы не портить текст в приложениях с молчащей AX-записью.
+        XCTAssertEqual(converter.modeCache["com.example.TextEdit"], .clipboard)
+    }
+
+    func testPrefersClipboardSkipsAX() async {
+        let clipboardFirst = Converter(
+            currentLayout: { [weak self] in self?.currentLayout },
+            switchLayout: { [weak self] in self?.switchedTo.append($0) },
+            appRules: appRules,
+            undoStore: undoStore,
+            frontmostBundleID: { [weak self] in self?.bundleID },
+            prefersClipboard: { _ in true },
+            makeAXEngine: { [axEngine] in axEngine ?? StubEngine() },
+            makeClipboardEngine: { [clipboardEngine] in clipboardEngine ?? StubEngine() }
+        )
+        clipboardEngine.result = ("ghbdtn", "привет")
+        let outcome = await clipboardFirst.trigger()
+        XCTAssertEqual(outcome, .converted(original: "ghbdtn", converted: "привет"))
+        XCTAssertEqual(axEngine.calls, 0, "AX не должен вызываться для Electron-приложений")
     }
 
     func testBlockedApp() async {

@@ -96,6 +96,9 @@ public final class Converter {
     private let appRules: AppRules
     private let undoStore: UndoStore
     private let frontmostBundleID: @Sendable () -> String?
+    /// Приложения с заведомо сломанной AX-записью (Electron и пр.) —
+    /// сразу clipboard-режим, без портящей текст AX-попытки.
+    private let prefersClipboard: @Sendable (String) -> Bool
     private let makeAXEngine: @Sendable () -> any ConversionEngine
     private let makeClipboardEngine: @Sendable () -> any ConversionEngine
     /// Вызывается после успешной конвертации (звук в UI-слое).
@@ -109,6 +112,7 @@ public final class Converter {
         appRules: AppRules,
         undoStore: UndoStore,
         frontmostBundleID: @escaping @Sendable () -> String?,
+        prefersClipboard: @escaping @Sendable (String) -> Bool = { _ in false },
         makeAXEngine: @escaping @Sendable () -> any ConversionEngine = { AXConversionEngine() },
         makeClipboardEngine: @escaping @Sendable () -> any ConversionEngine = { ClipboardConversionEngine() },
         onConverted: @escaping @Sendable () -> Void = {}
@@ -119,6 +123,7 @@ public final class Converter {
             appRules: appRules,
             undoStore: undoStore,
             frontmostBundleID: frontmostBundleID,
+            prefersClipboard: prefersClipboard,
             makeAXEngine: makeAXEngine,
             makeClipboardEngine: makeClipboardEngine,
             onConverted: onConverted
@@ -131,6 +136,7 @@ public final class Converter {
         appRules: AppRules,
         undoStore: UndoStore,
         frontmostBundleID: @escaping @Sendable () -> String?,
+        prefersClipboard: @escaping @Sendable (String) -> Bool = { _ in false },
         makeAXEngine: @escaping @Sendable () -> any ConversionEngine,
         makeClipboardEngine: @escaping @Sendable () -> any ConversionEngine,
         onConverted: @escaping @Sendable () -> Void = {}
@@ -140,6 +146,7 @@ public final class Converter {
         self.appRules = appRules
         self.undoStore = undoStore
         self.frontmostBundleID = frontmostBundleID
+        self.prefersClipboard = prefersClipboard
         self.makeAXEngine = makeAXEngine
         self.makeClipboardEngine = makeClipboardEngine
         self.onConverted = onConverted
@@ -199,17 +206,17 @@ public final class Converter {
     /// при неудаче — clipboard, успешный режим запоминается.
     private func performConversion(bundleID: String) async -> (String, String)? {
         let cached = modeCache[bundleID]
-        if cached == .clipboard {
+        if cached == .clipboard || prefersClipboard(bundleID) {
             return await makeClipboardEngine().perform()
         }
         if let result = await makeAXEngine().perform() {
             modeCache[bundleID] = .accessibility
             return result
         }
-        if let result = await makeClipboardEngine().perform() {
-            modeCache[bundleID] = .clipboard
-            return result
-        }
-        return nil
+        // AX для этого приложения ненадёжен (в т.ч. «успешная» запись,
+        // не прошедшая верификацию, как в Electron) — больше не пытаемся,
+        // чтобы не портить текст при каждой конвертации.
+        modeCache[bundleID] = .clipboard
+        return await makeClipboardEngine().perform()
     }
 }
