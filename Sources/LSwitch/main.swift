@@ -192,6 +192,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 logger.info("Clipboard: \(original) → \(converted)")
             case .copyFailed:
                 logger.notice("Clipboard: Cmd+C не дал результата")
+                await MainActor.run {
+                    self.showAlert(
+                        title: "Конвертация через буфер",
+                        text: "Cmd+C не дал результата: фокус не в текстовом поле "
+                            + "или нет выделения/текста перед курсором."
+                    )
+                }
             }
         }
     }

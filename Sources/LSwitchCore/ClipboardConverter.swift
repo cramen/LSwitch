@@ -18,6 +18,12 @@ public final class ClipboardConverter {
         public var initialReadDelay: TimeInterval = 0.03
         /// Пауза после записи перед Cmd+V, секунды.
         public var writeDelay: TimeInterval = 0.02
+        /// Пауза после Cmd+V перед восстановлением буфера: приложение-цель
+        /// должно успеть прочитать буфер, иначе вставится старое содержимое.
+        public var postPasteDelay: TimeInterval = 0.15
+        /// Пауза перед первым Cmd+C: пункт меню статус-бара забирает
+        /// key-фокус, целевое приложение должно успеть его вернуть.
+        public var preCopyDelay: TimeInterval = 0.15
         /// Максимум попыток прочитать скопированный текст (с удвоением паузы).
         public var maxAttempts = 3
 
@@ -54,6 +60,11 @@ public final class ClipboardConverter {
 
         var delay = configuration.initialReadDelay
         for attempt in 1...configuration.maxAttempts {
+            // Первая попытка ждёт возврата фокуса из меню, повторы — удвоенную паузу чтения.
+            let waitBeforeCopy = attempt == 1 ? configuration.preCopyDelay : 0
+            if waitBeforeCopy > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(waitBeforeCopy * 1_000_000_000))
+            }
             let changeCountBefore = pasteboard.changeCount
             postShortcut(virtualKey: 0x08) // kVK_ANSI_C
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
@@ -73,6 +84,9 @@ public final class ClipboardConverter {
         pasteboard.setString(converted, forType: .string)
         try? await Task.sleep(nanoseconds: UInt64(configuration.writeDelay * 1_000_000_000))
         postShortcut(virtualKey: 0x09) // kVK_ANSI_V
+        // Ждём, пока целевое приложение обработает Cmd+V, — иначе defer
+        // восстановит буфер до вставки, и вставится старое содержимое.
+        try? await Task.sleep(nanoseconds: UInt64(configuration.postPasteDelay * 1_000_000_000))
         logger.info("Сконвертировано через буфер: \(original) → \(converted)")
         return .success(original: original, converted: converted)
     }
