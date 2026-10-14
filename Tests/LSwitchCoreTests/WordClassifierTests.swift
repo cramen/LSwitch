@@ -184,20 +184,36 @@ final class PersonalDictionaryTests: XCTestCase {
 
 final class LastWordBeforeDelimiterTests: XCTestCase {
 
-    func testTrailingDelimiterSkipped() {
+    private func bufferWith(_ text: String) -> KeystrokeBuffer {
         let buffer = KeystrokeBuffer(capacity: 100)
-        for letter in "ghbdtn " {
-            let kind: Keystroke.Kind = letter == " " ? .delimiter(" ") : .character(letter)
-            buffer.append(Keystroke(kind: kind))
+        let classifier = KeystrokeClassifier()
+        for char in text {
+            buffer.append(Keystroke(kind: classifier.classify(character: char)))
         }
+        return buffer
+    }
+
+    func testTrailingDelimiterSkipped() {
+        let buffer = bufferWith("ghbdtn ")
         XCTAssertEqual(buffer.lastWordBeforeDelimiter(), "ghbdtn")
         // Обычный lastWord при этом пуст — разделитель в конце.
         XCTAssertEqual(buffer.lastWord(), "")
     }
 
+    func testAutoSwitchWordStripsTrailingPunctuation() {
+        XCTAssertEqual(bufferWith("ghbdtn,").lastWordForAutoSwitch(), "ghbdtn")
+        XCTAssertEqual(bufferWith("ghbdtn ").lastWordForAutoSwitch(), "ghbdtn")
+    }
+
+    func testAutoSwitchWordKeepsInnerLayoutPunctuation() {
+        // «;» — это «ж»: внутри слова сохраняется, хвостовая обрезается.
+        XCTAssertEqual(bufferWith("rf;tncz").lastWordForAutoSwitch(), "rf;tncz")
+        XCTAssertEqual(bufferWith("rf;tncz,").lastWordForAutoSwitch(), "rf;tncz")
+        XCTAssertEqual(bufferWith("rf;tncz ").lastWordForAutoSwitch(), "rf;tncz")
+    }
+
     func testEmptyAfterControl() {
-        let buffer = KeystrokeBuffer(capacity: 100)
-        buffer.append(Keystroke(kind: .character("a")))
+        let buffer = bufferWith("abc")
         buffer.append(Keystroke(kind: .control))
         XCTAssertEqual(buffer.lastWordBeforeDelimiter(), "")
     }

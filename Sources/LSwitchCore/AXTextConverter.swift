@@ -5,10 +5,12 @@ import Foundation
 /// вынесенная для unit-тестов.
 public enum WordBoundary {
 
-    /// Символ слова: буква любого алфавита. Цифры и пунктуация — разделители
-    /// (согласуется с эвристикой F11: пароль-подобные строки не конвертируем).
+    /// Символ слова: буква любого алфавита ИЛИ символ с соответствием
+    /// в раскладке («;» — это «ж», «'» — «э»): на экране может оказаться
+    /// текст, набранный в неправильной раскладке. Хвостовая пунктуация
+    /// после извлечения обрезается (см. lastWord).
     public static func isWordCharacter(_ character: Character) -> Bool {
-        character.isLetter
+        character.isLetter || LayoutMap.shared.layout(of: character) != nil
     }
 
     /// Последнее слово перед позицией курсора.
@@ -28,6 +30,13 @@ public enum WordBoundary {
             let previous = text[text.index(before: start)]
             guard isWordCharacter(previous) else { break }
             start = text.index(before: start)
+        }
+        // Хвостовая пунктуация («привет,») не входит в слово, внутренняя
+        // раскладочная («rf;tncz») — входит.
+        while end > start {
+            let last = text[text.index(before: end)]
+            guard !last.isLetter else { break }
+            end = text.index(before: end)
         }
         guard start < end else { return nil }
         return start..<end

@@ -25,9 +25,15 @@ public struct AXConversionEngine: ConversionEngine {
 }
 
 public struct ClipboardConversionEngine: ConversionEngine {
-    public init() {}
+    /// Ожидаемое слово (из буфера ввода): точное выделение ⇧←×N и сверка.
+    private let expectedWord: String?
+
+    public init(expectedWord: String? = nil) {
+        self.expectedWord = expectedWord
+    }
+
     public func perform() async -> (original: String, converted: String)? {
-        switch await ClipboardConverter().convertSelection() {
+        switch await ClipboardConverter().convertSelection(expectedWord: expectedWord) {
         case .success(let original, let converted):
             return (original, converted)
         case .copyFailed:
@@ -100,7 +106,7 @@ public final class Converter {
     /// сразу clipboard-режим, без портящей текст AX-попытки.
     private let prefersClipboard: @Sendable (String) -> Bool
     private let makeAXEngine: @Sendable () -> any ConversionEngine
-    private let makeClipboardEngine: @Sendable () -> any ConversionEngine
+    private let makeClipboardEngine: @Sendable (String?) -> any ConversionEngine
     /// Вызывается после успешной конвертации (звук в UI-слое).
     private let onConverted: @Sendable () -> Void
 
@@ -114,7 +120,7 @@ public final class Converter {
         frontmostBundleID: @escaping @Sendable () -> String?,
         prefersClipboard: @escaping @Sendable (String) -> Bool = { _ in false },
         makeAXEngine: @escaping @Sendable () -> any ConversionEngine = { AXConversionEngine() },
-        makeClipboardEngine: @escaping @Sendable () -> any ConversionEngine = { ClipboardConversionEngine() },
+        makeClipboardEngine: @escaping @Sendable (String?) -> any ConversionEngine = { ClipboardConversionEngine(expectedWord: $0) },
         onConverted: @escaping @Sendable () -> Void = {}
     ) {
         self.init(
@@ -138,7 +144,7 @@ public final class Converter {
         frontmostBundleID: @escaping @Sendable () -> String?,
         prefersClipboard: @escaping @Sendable (String) -> Bool = { _ in false },
         makeAXEngine: @escaping @Sendable () -> any ConversionEngine,
-        makeClipboardEngine: @escaping @Sendable () -> any ConversionEngine,
+        makeClipboardEngine: @escaping @Sendable (String?) -> any ConversionEngine,
         onConverted: @escaping @Sendable () -> Void = {}
     ) {
         self.currentLayout = currentLayout
@@ -161,14 +167,14 @@ public final class Converter {
     /// Автоматика вызывает с allowUndo: false — разделитель не должен
     /// откатывать предыдущую конвертацию.
     @discardableResult
-    public func trigger(allowUndo: Bool = true) async -> Outcome {
-        if allowUndo, undoStore.pendingUndo() != nil {
-            return await undo()
+    public func trigger(expectedWord: String? = nil, allowUndo: Bool = true) async -> Outcome {
+        if allowUndo, let record = undoStore.pendingUndo() {
+            return await undo(record: record)
         }
-        return await convert()
+        return await convert(expectedWord: expectedWord)
     }
 
-    private func convert() async -> Outcome {
+    private func convert(expectedWord: String? = nil) async -> Outcome {
         guard let bundleID = frontmostBundleID(), !appRules.isBlocked(bundleID: bundleID) else {
             return .blockedByRules
         }
@@ -177,7 +183,7 @@ public final class Converter {
         guard let layoutBefore = await MainActor.run(body: currentLayout) else {
             return .unsupportedLayout
         }
-        guard let (original, converted) = await performConversion(bundleID: bundleID) else {
+        guard let (original, converted) = await performConversion(bundleID: bundleID, expectedWord: expectedWord) else {
             return .failed
         }
         undoStore.save(UndoRecord(
@@ -191,11 +197,14 @@ public final class Converter {
         return .converted(original: original, converted: converted)
     }
 
-    private func undo() async -> Outcome {
-        guard let record = undoStore.pendingUndo() else { return await convert() }
+    private func undo(record: UndoRecord) async -> Outcome {
         undoStore.invalidate()
-        // Откат — обратная конвертация (invert симметричен, design D2).
-        guard await performConversion(bundleID: frontmostBundleID() ?? "") != nil else {
+        // Откат — обратная конвертация (invert симметричен, design D2);
+        // на экране сейчас конвертированное слово — оно и ожидаемое.
+        guard await performConversion(
+            bundleID: frontmostBundleID() ?? "",
+            expectedWord: record.converted
+        ) != nil else {
             return .failed
         }
         await MainActor.run { switchLayout(record.layoutBefore) }
@@ -204,10 +213,10 @@ public final class Converter {
 
     /// Возвращает пару (исходник, результат): сначала кэшированный/AX-режим,
     /// при неудаче — clipboard, успешный режим запоминается.
-    private func performConversion(bundleID: String) async -> (String, String)? {
+    private func performConversion(bundleID: String, expectedWord: String? = nil) async -> (String, String)? {
         let cached = modeCache[bundleID]
         if cached == .clipboard || prefersClipboard(bundleID) {
-            return await makeClipboardEngine().perform()
+            return await makeClipboardEngine(expectedWord).perform()
         }
         if let result = await makeAXEngine().perform() {
             modeCache[bundleID] = .accessibility
@@ -217,6 +226,6 @@ public final class Converter {
         // не прошедшая верификацию, как в Electron) — больше не пытаемся,
         // чтобы не портить текст при каждой конвертации.
         modeCache[bundleID] = .clipboard
-        return await makeClipboardEngine().perform()
+        return await makeClipboardEngine(expectedWord).perform()
     }
 }

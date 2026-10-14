@@ -40,7 +40,7 @@ final class ConverterTests: XCTestCase {
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.bundleID },
             makeAXEngine: { axStub },
-            makeClipboardEngine: { clipboardStub }
+            makeClipboardEngine: { _ in clipboardStub }
         )
     }
 
@@ -92,7 +92,7 @@ final class ConverterTests: XCTestCase {
             frontmostBundleID: { [weak self] in self?.bundleID },
             prefersClipboard: { _ in true },
             makeAXEngine: { [axEngine] in axEngine ?? StubEngine() },
-            makeClipboardEngine: { [clipboardEngine] in clipboardEngine ?? StubEngine() }
+            makeClipboardEngine: { [clipboardEngine] _ in clipboardEngine ?? StubEngine() }
         )
         clipboardEngine.result = ("ghbdtn", "привет")
         let outcome = await clipboardFirst.trigger()
@@ -137,6 +137,32 @@ final class ConverterTests: XCTestCase {
         let outcome = await converter.trigger()
         // Откат сброшен — это новая конвертация, а не undo.
         XCTAssertEqual(outcome, .converted(original: "yjdf", converted: "нова"))
+    }
+
+    func testUndoPassesConvertedWordToClipboardEngine() async {
+        final class WordBox: @unchecked Sendable { var word: String? }
+        let box = WordBox()
+        let capturing = Converter(
+            currentLayout: { [weak self] in self?.currentLayout },
+            switchLayout: { [weak self] in self?.switchedTo.append($0) },
+            appRules: appRules,
+            undoStore: undoStore,
+            frontmostBundleID: { [weak self] in self?.bundleID },
+            prefersClipboard: { _ in true },
+            makeAXEngine: { [axEngine] in axEngine ?? StubEngine() },
+            makeClipboardEngine: { [clipboardEngine] word in
+                box.word = word
+                return clipboardEngine ?? StubEngine()
+            }
+        )
+        clipboardEngine.result = ("ghbdtn", "привет")
+        _ = await capturing.trigger(expectedWord: "ghbdtn")
+        XCTAssertEqual(box.word, "ghbdtn")
+
+        // Откат: на экране конвертированное слово — оно и ожидаемое.
+        clipboardEngine.result = ("привет", "ghbdtn")
+        _ = await capturing.trigger()
+        XCTAssertEqual(box.word, "привет")
     }
 
     func testUndoWindowExpiry() {

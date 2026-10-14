@@ -44,6 +44,17 @@ final class WordBoundaryTests: XCTestCase {
         XCTAssertEqual(word(in: "слово word"), "word")
     }
 
+    func testLayoutPunctuationInsideWord() {
+        // «;» — это «ж»: слово с раскладочной пунктуацией берётся целиком.
+        XCTAssertEqual(word(in: "rf;tncz "), "rf;tncz")
+        XCTAssertEqual(word(in: "rf;tncz"), "rf;tncz")
+    }
+
+    func testTrailingPunctuationStripped() {
+        XCTAssertEqual(word(in: "привет,"), "привет")
+        XCTAssertEqual(word(in: "hello, world"), "world")
+    }
+
     func testUnicodeLetters() {
         XCTAssertEqual(word(in: "café"), "café")
     }

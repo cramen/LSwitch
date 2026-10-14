@@ -84,6 +84,17 @@ public final class KeystrokeBuffer: @unchecked Sendable {
         }
     }
 
+    /// Последнее слово для автопереключения: игнорирует завершающие
+    /// разделители и обрезает хвостовую пунктуацию («ghbdtn,» → «ghbdtn»),
+    /// но сохраняет раскладочные символы внутри слова («rf;tncz»).
+    public func lastWordForAutoSwitch() -> String {
+        var word = lastWordBeforeDelimiter()
+        while let last = word.last, !last.isLetter {
+            word.removeLast()
+        }
+        return word
+    }
+
     /// Удаляет последний разделитель (если он есть) — после автоконвертации
     /// разделитель вводится заново уже в новой раскладке.
     public func removeLastDelimiter() {

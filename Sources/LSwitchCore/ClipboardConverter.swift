@@ -51,11 +51,16 @@ public final class ClipboardConverter {
     /// Выполняет конвертацию последнего слова перед курсором через буфер.
     /// Буфер обмена восстанавливается при любом исходе.
     ///
-    /// Слово всегда сначала выделяется через ⌥⇧←: в Electron-редакторах
-    /// (Obsidian, VS Code) Cmd+C без выделения копирует всю строку, и слепое
-    /// копирование приводило к дублированию («ghbdtn привет»).
+    /// Выделение слова: если известно ожидаемое слово (из буфера ввода) —
+    /// точное ⇧← × N и сверка скопированного со словом (защита от
+    /// расхождения границ в Electron, где «rf;tncz» по ⌥⇧← выделялся бы
+    /// фрагментом «tncz», а Cmd+C без выделения копирует всю строку).
+    /// Без ожидаемого слова — ⌥⇧← как универсальный fallback.
     @discardableResult
-    public func convertSelection(pasteboard: NSPasteboard = .general) async -> Outcome {
+    public func convertSelection(
+        expectedWord: String? = nil,
+        pasteboard: NSPasteboard = .general
+    ) async -> Outcome {
         let snapshot = PasteboardService.capture(from: pasteboard)
         // Fingerprint до операции — для проверки инварианта «буфер бит-в-бит
         // идентичен» (задача 4.2): после восстановления сверяем в лог.
@@ -68,7 +73,7 @@ public final class ClipboardConverter {
 
         // Пауза на возврат фокуса из меню, затем выделяем слово слева.
         try? await Task.sleep(nanoseconds: UInt64(configuration.preCopyDelay * 1_000_000_000))
-        postSelectWordLeft()
+        selectWord(expectedWord: expectedWord)
         try? await Task.sleep(nanoseconds: UInt64(configuration.writeDelay * 1_000_000_000))
 
         var delay = configuration.initialReadDelay
@@ -77,14 +82,32 @@ public final class ClipboardConverter {
             postShortcut(virtualKey: 0x08) // kVK_ANSI_C
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
 
-            if pasteboard.changeCount != changeCountBefore,
-               let copied = pasteboard.string(forType: .string), !copied.isEmpty {
-                return await paste(converted: transform(copied), original: copied, pasteboard: pasteboard)
+            guard pasteboard.changeCount != changeCountBefore,
+                  let copied = pasteboard.string(forType: .string), !copied.isEmpty else {
+                logger.notice("Cmd+C не дал результата, попытка \(attempt)/\(self.configuration.maxAttempts)")
+                delay *= 2
+                continue
             }
-            logger.notice("Cmd+C не дал результата, попытка \(attempt)/\(self.configuration.maxAttempts)")
-            delay *= 2
+            if let expectedWord, copied != expectedWord {
+                // Скопировалось не ожидаемое слово — перевыделяем и пробуем ещё раз.
+                logger.notice("Скопировано не ожидаемое слово (длина \(copied.count)), попытка \(attempt)")
+                selectWord(expectedWord: expectedWord)
+                delay *= 2
+                continue
+            }
+            return await paste(converted: transform(copied), original: copied, pasteboard: pasteboard)
         }
         return .copyFailed
+    }
+
+    private func selectWord(expectedWord: String?) {
+        guard let expectedWord, !expectedWord.isEmpty else {
+            postSelectWordLeft()
+            return
+        }
+        for _ in 0..<expectedWord.count {
+            postKey(virtualKey: 0x7B, flags: .maskShift) // ⇧←
+        }
     }
 
     private func paste(converted: String, original: String, pasteboard: NSPasteboard) async -> Outcome {

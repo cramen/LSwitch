@@ -87,8 +87,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if detector.handle(raw) {
+            // Ожидаемое слово из буфера — для точного выделения ⇧←×N
+            // в clipboard-режиме (Electron гранулярности не доверяем).
+            let word = keystrokeBuffer.lastWord()
             Task { [converter, autoSwitch] in
-                let outcome = await converter.trigger()
+                let outcome = await converter.trigger(expectedWord: word.isEmpty ? nil : word)
                 if case .undone = outcome {
                     // Откат автоконвертации — сигнал обучения (design D4).
                     autoSwitch.registerUndo()
@@ -105,20 +108,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let kind = classifier.classify(raw) {
             keystrokeBuffer.append(Keystroke(kind: kind, isSynthetic: raw.isSynthetic))
-            if case .delimiter = kind, settings.autoSwitchEnabled {
+            // Триггер: разделители И пунктуация с маппингом («ghbdtn,» —
+            // запятая и разделитель, и триггер; TZ.md F10).
+            if settings.autoSwitchEnabled, isAutoSwitchTrigger(kind) {
                 maybeAutoConvert()
             }
+        }
+    }
+
+    private func isAutoSwitchTrigger(_ kind: Keystroke.Kind) -> Bool {
+        switch kind {
+        case .delimiter:
+            return true
+        case .character(let char):
+            // Маппируемая пунктуация хранится как character, но слово завершает.
+            return !char.isLetter && !char.isNumber
+        case .control:
+            return false
         }
     }
 
     /// Автопереключение: разделитель набран, проверяем последнее слово.
     /// Вызывается на очереди обработки EventTapCore.
     private func maybeAutoConvert() {
-        let word = keystrokeBuffer.lastWordBeforeDelimiter()
-        guard autoSwitch.evaluate(word: word) != nil else { return }
+        let word = keystrokeBuffer.lastWordForAutoSwitch()
+        guard !word.isEmpty, autoSwitch.evaluate(word: word) != nil else { return }
         logger.notice("Автоконвертация слова длиной \(word.count)")
         Task { [converter, autoSwitch] in
-            let outcome = await converter.trigger(allowUndo: false)
+            let outcome = await converter.trigger(expectedWord: word, allowUndo: false)
             switch outcome {
             case .converted:
                 self.keystrokeBuffer.clear()
