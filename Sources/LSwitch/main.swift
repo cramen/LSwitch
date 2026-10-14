@@ -8,7 +8,7 @@ import SwiftUI
 ///
 /// MVP (этап 1): двойной Shift конвертирует последнее слово
 /// (AX-first, clipboard-fallback) и переключает раскладку, повторный —
-/// откат. Blacklist приложений, PermGuard, настройки, автозапуск.
+/// откат. Список исключений приложений, PermGuard, настройки, автозапуск.
 /// Диагностический режим спайков сохранён: `lswitch --probe`.
 final class AppDelegate: NSObject, NSApplicationDelegate {
 

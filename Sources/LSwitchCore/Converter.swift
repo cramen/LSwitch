@@ -83,7 +83,7 @@ public final class Converter {
     public enum Outcome: Equatable {
         case converted(original: String, converted: String)
         case undone
-        /// Активное приложение в blacklist.
+        /// Активное приложение в списке исключений.
         case blockedByRules
         /// Раскладка вне пары ru/en — конвертировать нечего.
         case unsupportedLayout

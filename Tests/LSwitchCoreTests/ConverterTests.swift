@@ -24,10 +24,10 @@ final class ConverterTests: XCTestCase {
     private var converter: Converter!
 
     override func setUp() {
-        let ax = StubEngine()
-        let clipboard = StubEngine()
-        axEngine = ax
-        clipboardEngine = clipboard
+        let axStub = StubEngine()
+        let clipboardStub = StubEngine()
+        axEngine = axStub
+        clipboardEngine = clipboardStub
         currentLayout = .english
         switchedTo = []
         bundleID = "com.example.TextEdit"
@@ -39,8 +39,8 @@ final class ConverterTests: XCTestCase {
             appRules: appRules,
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.bundleID },
-            makeAXEngine: { ax },
-            makeClipboardEngine: { clipboard }
+            makeAXEngine: { axStub },
+            makeClipboardEngine: { clipboardStub }
         )
     }
 
@@ -143,7 +143,7 @@ final class AppRulesTests: XCTestCase {
         return AppRules(defaults: defaults)
     }
 
-    func testPresetBlacklist() {
+    func testPresetBlockedApps() {
         let rules = makeRules()
         XCTAssertTrue(rules.isBlocked(bundleID: "com.apple.Terminal"))
         XCTAssertTrue(rules.isBlocked(bundleID: "com.googlecode.iterm2"))
@@ -151,23 +151,23 @@ final class AppRulesTests: XCTestCase {
         XCTAssertFalse(rules.isBlocked(bundleID: nil))
     }
 
-    func testUserBlacklistAddRemove() {
+    func testUserBlockedAppsAddRemove() {
         let rules = makeRules()
-        rules.addToBlacklist("com.example.MyApp")
-        rules.addToBlacklist("com.example.MyApp") // дубликат игнорируется
-        rules.addToBlacklist("  ")
-        XCTAssertEqual(rules.userBlacklist, ["com.example.MyApp"])
+        rules.addBlockedApp("com.example.MyApp")
+        rules.addBlockedApp("com.example.MyApp") // дубликат игнорируется
+        rules.addBlockedApp("  ")
+        XCTAssertEqual(rules.userBlockedApps, ["com.example.MyApp"])
         XCTAssertTrue(rules.isBlocked(bundleID: "com.example.MyApp"))
-        rules.removeFromBlacklist("com.example.MyApp")
+        rules.removeBlockedApp("com.example.MyApp")
         XCTAssertFalse(rules.isBlocked(bundleID: "com.example.MyApp"))
     }
 
-    func testUserBlacklistPersistsAcrossInstances() {
+    func testUserBlockedAppsPersistsAcrossInstances() {
         let suite = "lswitch.tests.\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suite) else {
             fatalError("Не удалось создать тестовый UserDefaults")
         }
-        AppRules(defaults: defaults).addToBlacklist("com.example.App")
+        AppRules(defaults: defaults).addBlockedApp("com.example.App")
         let reloaded = AppRules(defaults: defaults)
         XCTAssertTrue(reloaded.isBlocked(bundleID: "com.example.App"))
     }

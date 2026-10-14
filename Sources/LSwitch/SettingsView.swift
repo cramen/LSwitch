@@ -27,24 +27,24 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-            blacklistSection
+            blockedAppsSection
         }
         .formStyle(.grouped)
         .frame(width: 420, height: 320)
     }
 
-    private var blacklistSection: some View {
+    private var blockedAppsSection: some View {
         Section("Исключения (bundle ID)") {
-            ForEach(AppRules.presetBlacklist.sorted(), id: \.self) { bundleID in
+            ForEach(AppRules.presetBlockedApps.sorted(), id: \.self) { bundleID in
                 Label(bundleID, systemImage: "lock")
                     .foregroundStyle(.secondary)
             }
-            ForEach(appRules.userBlacklist, id: \.self) { bundleID in
+            ForEach(appRules.userBlockedApps, id: \.self) { bundleID in
                 HStack {
                     Text(bundleID)
                     Spacer()
                     Button("Удалить") {
-                        appRules.removeFromBlacklist(bundleID)
+                        appRules.removeBlockedApp(bundleID)
                         settings.objectWillChange.send()
                     }
                 }
@@ -52,7 +52,7 @@ struct SettingsView: View {
             HStack {
                 TextField("com.example.app", text: $newBundleID)
                 Button("Добавить") {
-                    appRules.addToBlacklist(newBundleID)
+                    appRules.addBlockedApp(newBundleID)
                     newBundleID = ""
                     settings.objectWillChange.send()
                 }
