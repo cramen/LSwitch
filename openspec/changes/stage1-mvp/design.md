@@ -1,7 +1,7 @@
 ## Context
 
 См. [proposal](proposal.md). На 2026-10-14 каркас MVP реализован и уточнён
-изменением `fix-conversion-safety`. [Его протокол](../fix-conversion-safety/notes.md)
+изменением `fix-conversion-safety`. [Его протокол](../archive/2026-10-14-fix-conversion-safety/notes.md)
 фиксирует реальные результаты TextEdit, Safari, Obsidian, GIGA IDE, password-поля
 и выключателя. Это частичная приёмка MVP: отзыв TCC, Terminal, звук,
 настройка/истечение окна undo и login пока не подтверждены полностью. Выявленный

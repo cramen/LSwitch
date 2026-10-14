@@ -3,7 +3,7 @@
 См. [proposal.md](proposal.md). Спайковые компоненты уже используются продуктом:
 перехват, ручное преобразование, автоматика, настройки и защита контекста реализованы.
 Первоначальный [notes.md](notes.md) является историческим протоколом; текущая
-проверка находится в [fix-conversion-safety/notes.md](../fix-conversion-safety/notes.md).
+проверка находится в [fix-conversion-safety/notes.md](../archive/2026-10-14-fix-conversion-safety/notes.md).
 
 Проект собирается для macOS 13+ через SwiftPM с `swift-tools-version: 5.10`.
 Строгая миграция на Swift 6 concurrency не завершена. Приложение не отправляет

@@ -58,4 +58,4 @@ Terminal.app и iTerm2.
 
 Matching и персистентность проверены unit-тестами. Живой Terminal/iTerm
 остаётся в [задаче 5.3](../../tasks.md); password Safari подтверждён отдельно
-[протоколом](../../../fix-conversion-safety/notes.md) и не заменяет проверку blacklist.
+[протоколом](../../../archive/2026-10-14-fix-conversion-safety/notes.md) и не заменяет проверку blacklist.
