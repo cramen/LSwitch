@@ -35,6 +35,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var workspaceObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
 
+    /// Активное приложение — кэш, обновляемый на главном потоке по
+    /// нотификации NSWorkspace (сам NSWorkspace дёргать с фоновых очередей
+    /// нельзя, а перехват работает на своей).
+    private let frontmostLock = NSLock()
+    private var frontmostAppBundleID: String?
+
+    private func currentFrontmostBundleID() -> String? {
+        frontmostLock.lock()
+        defer { frontmostLock.unlock() }
+        return frontmostAppBundleID
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
         setupPermGuard()
@@ -69,8 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Вызывается на очереди обработки EventTapCore.
     private func handleIntercepted(_ raw: RawKeyEvent) {
-        let bundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        if appRules.isBlocked(bundleID: bundleID) {
+        if appRules.isBlocked(bundleID: currentFrontmostBundleID()) {
             keystrokeBuffer.clear()
             return
         }
@@ -124,7 +135,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             layoutManager: layoutManager,
             appRules: appRules,
             undoStore: undoStore,
-            frontmostBundleID: { NSWorkspace.shared.frontmostApplication?.bundleIdentifier },
+            frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
             onConverted: { [weak self] in
                 guard let self, self.settings.soundEnabled else { return }
                 DispatchQueue.main.async {
@@ -160,14 +171,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Смена активного приложения очищает буфер ввода (spec app-rules).
+    /// Смена активного приложения очищает буфер ввода (spec app-rules)
+    /// и обновляет кэш frontmost (нотификация приходит на главном потоке).
     private func observeWorkspace() {
+        frontmostLock.lock()
+        frontmostAppBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        frontmostLock.unlock()
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
-            self?.keystrokeBuffer.clear()
+        ) { [weak self] notification in
+            guard let self else { return }
+            let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
+                .bundleIdentifier
+            self.frontmostLock.lock()
+            self.frontmostAppBundleID = bundleID
+            self.frontmostLock.unlock()
+            self.keystrokeBuffer.clear()
         }
     }
 

@@ -4,6 +4,10 @@ import Foundation
 
 /// Чтение и переключение системной раскладки через TIS API (design D3).
 ///
+/// ВНИМАНИЕ: TIS/HIToolbox требует главный поток (assert в
+/// TISCopyCurrentKeyboardLayoutInputSource). Вызывать только с main thread
+/// (в `Converter` это делает переход на MainActor).
+///
 /// Раскладка определяется по `kTISPropertyInputSourceID` текущего источника:
 /// id содержит "Russian" → ru, "ABC"/"US" → en, иначе раскладка вне пары
 /// MVP и конвертация не выполняется.

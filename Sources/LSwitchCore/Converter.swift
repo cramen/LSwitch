@@ -165,7 +165,9 @@ public final class Converter {
         guard let bundleID = frontmostBundleID(), !appRules.isBlocked(bundleID: bundleID) else {
             return .blockedByRules
         }
-        guard let layoutBefore = currentLayout() else {
+        // TIS API (HIToolbox) требует главный поток — проверено крэш-отчётом
+        // (_dispatch_assert_queue_fail в TISCopyCurrentKeyboardLayoutInputSource).
+        guard let layoutBefore = await MainActor.run(body: currentLayout) else {
             return .unsupportedLayout
         }
         guard let (original, converted) = await performConversion(bundleID: bundleID) else {
@@ -177,7 +179,7 @@ public final class Converter {
             layoutBefore: layoutBefore,
             timestamp: Date()
         ))
-        switchLayout(layoutBefore.opposite)
+        await MainActor.run { switchLayout(layoutBefore.opposite) }
         onConverted()
         return .converted(original: original, converted: converted)
     }
@@ -189,7 +191,7 @@ public final class Converter {
         guard await performConversion(bundleID: frontmostBundleID() ?? "") != nil else {
             return .failed
         }
-        switchLayout(record.layoutBefore)
+        await MainActor.run { switchLayout(record.layoutBefore) }
         return .undone
     }
 
