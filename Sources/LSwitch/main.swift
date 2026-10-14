@@ -21,11 +21,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let settings = SettingsStore()
     private let appRules = AppRules()
+    private let personalDictionary = PersonalDictionary()
     private let layoutManager = LayoutManager()
     private let undoStore = UndoStore()
     private let permGuard = PermGuard()
     private let keystrokeBuffer = KeystrokeBuffer()
     private let classifier = KeystrokeClassifier()
+    private let autoSwitch = AutoSwitchCoordinator()
     private var detector = DoubleShiftDetector()
     private var eventTap: EventTapCore?
     private lazy var converter = makeConverter()
@@ -73,9 +75,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         if detector.handle(raw) {
-            Task { [converter] in
+            Task { [converter, autoSwitch] in
                 let outcome = await converter.trigger()
-                self.logger.info("Конвертация: \(String(describing: outcome))")
+                if case .undone = outcome {
+                    // Откат автоконвертации — сигнал обучения (design D4).
+                    autoSwitch.registerUndo()
+                } else if case .converted = outcome {
+                    autoSwitch.clearPendingUndoCandidate()
+                    self.keystrokeBuffer.removeLastWord()
+                }
+                self.logger.info("Хоткей: \(String(describing: outcome))")
             }
             return
         }
@@ -84,6 +93,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if let kind = classifier.classify(raw) {
             keystrokeBuffer.append(Keystroke(kind: kind, isSynthetic: raw.isSynthetic))
+            if case .delimiter = kind, settings.autoSwitchEnabled {
+                maybeAutoConvert()
+            }
+        }
+    }
+
+    /// Автопереключение: разделитель набран, проверяем последнее слово.
+    /// Вызывается на очереди обработки EventTapCore.
+    private func maybeAutoConvert() {
+        let word = keystrokeBuffer.lastWordBeforeDelimiter()
+        guard autoSwitch.evaluate(word: word) != nil else { return }
+        logger.notice("Автоконвертация слова длиной \(word.count)")
+        Task { [converter, autoSwitch] in
+            let outcome = await converter.trigger(allowUndo: false)
+            switch outcome {
+            case .converted:
+                self.keystrokeBuffer.removeLastWord()
+            case .failed:
+                autoSwitch.clearPendingUndoCandidate()
+            default:
+                break
+            }
+            self.logger.info("Автоконвертация: \(String(describing: outcome))")
         }
     }
 
@@ -198,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openSettings() {
         if settingsWindow == nil {
-            let view = SettingsView(settings: settings, appRules: appRules)
+            let view = SettingsView(settings: settings, appRules: appRules, personalDictionary: personalDictionary)
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
                 styleMask: [.titled, .closable],

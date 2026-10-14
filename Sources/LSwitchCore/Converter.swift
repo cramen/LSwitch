@@ -151,9 +151,11 @@ public final class Converter {
     }
 
     /// Точка входа по хоткею: откат в окне, иначе новая конвертация.
+    /// Автоматика вызывает с allowUndo: false — разделитель не должен
+    /// откатывать предыдущую конвертацию.
     @discardableResult
-    public func trigger() async -> Outcome {
-        if undoStore.pendingUndo() != nil {
+    public func trigger(allowUndo: Bool = true) async -> Outcome {
+        if allowUndo, undoStore.pendingUndo() != nil {
             return await undo()
         }
         return await convert()

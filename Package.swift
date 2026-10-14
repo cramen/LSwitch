@@ -9,7 +9,10 @@ let package = Package(
         .executable(name: "lswitch", targets: ["LSwitch"])
     ],
     targets: [
-        .target(name: "LSwitchCore"),
+        .target(
+            name: "LSwitchCore",
+            resources: [.process("Resources")]
+        ),
         .executableTarget(
             name: "LSwitch",
             dependencies: ["LSwitchCore"]

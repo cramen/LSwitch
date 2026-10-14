@@ -94,6 +94,28 @@ public final class KeystrokeBuffer: @unchecked Sendable {
         }
     }
 
+    /// Последнее слово, игнорируя завершающие разделители: для проверки
+    /// автопереключения в момент, когда разделитель только что набран
+    /// и уже лежит в буфере.
+    public func lastWordBeforeDelimiter() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        var word: [Character] = []
+        var skippingDelimiters = true
+        for keystroke in storage.reversed() {
+            switch keystroke.kind {
+            case .character(let letter):
+                skippingDelimiters = false
+                word.append(letter)
+            case .delimiter:
+                if !skippingDelimiters { return String(word.reversed()) }
+            case .control:
+                return String(word.reversed())
+            }
+        }
+        return String(word.reversed())
+    }
+
     public func clear() {
         lock.lock()
         defer { lock.unlock() }

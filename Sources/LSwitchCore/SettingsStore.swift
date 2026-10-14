@@ -10,6 +10,7 @@ public final class SettingsStore: ObservableObject {
         static let undoWindowSeconds = "settings.undoWindowSeconds"
         static let soundEnabled = "settings.soundEnabled"
         static let launchAtLogin = "settings.launchAtLogin"
+        static let autoSwitchEnabled = "settings.autoSwitchEnabled"
     }
 
     @Published public var enabled: Bool {
@@ -29,6 +30,12 @@ public final class SettingsStore: ObservableObject {
         didSet { defaults.set(launchAtLogin, forKey: Key.launchAtLogin) }
     }
 
+    /// Автопереключение по словарному классификатору. По умолчанию выключено
+    /// (консервативный старт, TZ.md R6); ручная конвертация работает всегда.
+    @Published public var autoSwitchEnabled: Bool {
+        didSet { defaults.set(autoSwitchEnabled, forKey: Key.autoSwitchEnabled) }
+    }
+
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -37,11 +44,13 @@ public final class SettingsStore: ObservableObject {
             Key.enabled: true,
             Key.undoWindowSeconds: 3.0,
             Key.soundEnabled: true,
-            Key.launchAtLogin: false
+            Key.launchAtLogin: false,
+            Key.autoSwitchEnabled: false
         ])
         self.enabled = defaults.bool(forKey: Key.enabled)
         self.undoWindowSeconds = defaults.double(forKey: Key.undoWindowSeconds)
         self.soundEnabled = defaults.bool(forKey: Key.soundEnabled)
         self.launchAtLogin = defaults.bool(forKey: Key.launchAtLogin)
+        self.autoSwitchEnabled = defaults.bool(forKey: Key.autoSwitchEnabled)
     }
 }

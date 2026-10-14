@@ -7,13 +7,18 @@ struct SettingsView: View {
 
     @ObservedObject var settings: SettingsStore
     let appRules: AppRules
+    let personalDictionary: PersonalDictionary
 
     @State private var newBundleID = ""
+    @State private var newExceptionWord = ""
     @State private var launchAtLoginError: String?
+    /// Триггер перерисовки списка исключений (PersonalDictionary — не ObservableObject).
+    @State private var dictionaryVersion = 0
 
     var body: some View {
         Form {
             Toggle("LSwitch включён", isOn: $settings.enabled)
+            Toggle("Автопереключение раскладки", isOn: $settings.autoSwitchEnabled)
             Toggle("Звук при конвертации", isOn: $settings.soundEnabled)
             Stepper(
                 "Окно отката: \(Int(settings.undoWindowSeconds)) с",
@@ -27,10 +32,36 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
             }
+            dictionarySection
             blockedAppsSection
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 320)
+        .frame(width: 420, height: 460)
+    }
+
+    private var dictionarySection: some View {
+        Section("Словарь исключений (не конвертировать)") {
+            ForEach(personalDictionary.words, id: \.self) { word in
+                HStack {
+                    Text(word)
+                    Spacer()
+                    Button("Удалить") {
+                        personalDictionary.remove(word)
+                        dictionaryVersion += 1
+                    }
+                }
+            }
+            HStack {
+                TextField("слово", text: $newExceptionWord)
+                Button("Добавить") {
+                    personalDictionary.add(newExceptionWord)
+                    newExceptionWord = ""
+                    dictionaryVersion += 1
+                }
+                .disabled(newExceptionWord.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .id(dictionaryVersion)
     }
 
     private var blockedAppsSection: some View {
