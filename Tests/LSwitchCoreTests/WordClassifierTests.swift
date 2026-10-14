@@ -50,6 +50,11 @@ final class WordClassifierTests: XCTestCase {
         XCTAssertEqual(makeClassifier().verdict(for: "GHBDTN"), .wrongLayout(converted: "ПРИВЕТ"))
     }
 
+    func testLayoutPunctuationConverts() {
+        // «;» → «ж»: rf;tncz = «кажется».
+        XCTAssertEqual(makeClassifier().verdict(for: "rf;tncz"), .wrongLayout(converted: "кажется"))
+    }
+
     func testPersonalDictionaryExcludes() {
         let suite = freshDefaults()
         let personal = PersonalDictionary(defaults: suite)
@@ -85,7 +90,13 @@ final class HeuristicsTests: XCTestCase {
     }
 
     func testPunctuationRejected() {
-        XCTAssertFalse(WordClassifier.passesHeuristics("don't"))
+        XCTAssertFalse(WordClassifier.passesHeuristics("abc!"))
+        XCTAssertFalse(WordClassifier.passesHeuristics("word-word"))
+    }
+
+    func testLayoutPunctuationAllowed() {
+        // «;» на клавише «ж», «'» — «э»: слова с ними конвертируются.
+        XCTAssertTrue(WordClassifier.passesHeuristics("rf;tncz"))
     }
 }
 

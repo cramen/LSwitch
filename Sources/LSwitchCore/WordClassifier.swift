@@ -51,10 +51,11 @@ public struct WordClassifier: Sendable {
         return .wrongLayout(converted: converted)
     }
 
-    /// Эвристики F11: длина ≥ 3, только буквы, без смешанного регистра.
+    /// Эвристики F11: длина ≥ 3, только буквы или символы с соответствием
+    /// в раскладке («;» — это «ж», «'» — «э» и т.д.), без смешанного регистра.
     public static func passesHeuristics(_ word: String) -> Bool {
         guard word.count >= 3 else { return false }
-        guard word.allSatisfy(\.isLetter) else { return false }
+        guard word.allSatisfy({ $0.isLetter || LayoutMap.shared.layout(of: $0) != nil }) else { return false }
         let lowered = word.lowercased()
         let uppered = word.uppercased()
         // Смешанный регистр: слово не нижнее и не верхнее целиком.
