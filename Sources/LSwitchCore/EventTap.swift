@@ -56,8 +56,16 @@ public enum SyntheticEventMarker {
     public static let magic: Int64 = 0x4C53_5754_4348_0001
 
     /// Помечает событие как синтезированное LSwitch. Вызывать до постинга.
-    public static func tag(_ event: CGEvent) {
+    @discardableResult
+    public static func tag(_ event: CGEvent) -> Bool {
         event.setIntegerValueField(.eventSourceUserData, value: magic)
+        if isSynthetic(event) { return true }
+        // После уже заданного userData повторный setIntegerValueField может
+        // сохранить старое значение. Обновление источника подтверждено на macOS 14.5.
+        guard let source = CGEventSource(event: event) else { return false }
+        source.userData = magic
+        event.setSource(source)
+        return isSynthetic(event)
     }
 
     public static func isSynthetic(_ event: CGEvent) -> Bool {

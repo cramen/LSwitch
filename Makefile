@@ -29,6 +29,8 @@ app:
 	mkdir -p $(APP_DIR)/Contents/MacOS
 	cp .build/debug/lswitch $(APP_DIR)/Contents/MacOS/LSwitch
 	cp packaging/Info.plist $(APP_DIR)/Contents/
+	mkdir -p $(APP_DIR)/Contents/Resources
+	cp -R .build/debug/LSwitch_LSwitchCore.bundle $(APP_DIR)/Contents/Resources/
 	codesign --force --sign "LSwitch Dev" --identifier ru.cramen.lswitch $(APP_DIR)
 
 run-app: app

@@ -1,5 +1,6 @@
 import ApplicationServices
 import Foundation
+import os
 
 /// Границы последнего слова в строке — чистая логика AX-конвертера,
 /// вынесенная для unit-тестов.
@@ -57,137 +58,203 @@ public enum AXConvertError: Error, Equatable {
     case writeFailed
 }
 
-/// Конвертация текста через Accessibility API без буфера обмена (спайк P0.2).
-///
-/// Порядок попыток (design D4):
-/// 1. `AXSelectedText` — если есть выделение, конвертируем его.
-/// 2. `AXValue` + `AXSelectedTextRange` — вычисляем границы последнего слова,
-///    выделяем его и заменяем через запись `AXSelectedText`.
-public final class AXTextConverter {
+/// Замена через Accessibility с проверкой текста, фокуса и конечной каретки.
+@MainActor
+public final class AXTextConverter: ConversionEngine {
 
-    /// Результат успешной конвертации: что и во что превратили (для лога спайка).
     public struct Outcome: Equatable {
         public let original: String
         public let converted: String
         public let wasSelection: Bool
     }
 
-    private let systemWide: AXUIElement
+    private let access: any AXTextAccess
     private let transform: (String) -> String
+    private let logger = Logger(subsystem: "LSwitch", category: "AXConverter")
 
-    public init(transform: @escaping (String) -> String = { LayoutMap.shared.invert($0) }) {
-        self.systemWide = AXUIElementCreateSystemWide()
+    public convenience init(transform: @escaping (String) -> String = { LayoutMap.shared.invert($0) }) {
+        self.init(access: SystemAXTextAccess(), transform: transform)
+    }
+
+    init(
+        access: any AXTextAccess,
+        transform: @escaping (String) -> String = { LayoutMap.shared.invert($0) }
+    ) {
+        self.access = access
         self.transform = transform
     }
 
-    /// Secure-поле определяется по subrole `AXSecureTextField`.
     public static func isSecureField(_ element: AXUIElement) -> Bool {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXSubroleAttribute as CFString, &value) == .success,
-              let subrole = value as? String else { return false }
-        return subrole == "AXSecureTextField"
+        SystemAXTextAccess.isSecureField(element)
     }
 
     public func focusedElement() -> AXUIElement? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            systemWide,
-            kAXFocusedUIElementAttribute as CFString,
-            &value
-        ) == .success, let value else { return nil }
-        // swiftlint:disable:next force_cast
-        return (value as! AXUIElement)
+        access.focusedElement()
     }
 
-    /// Выполняет конвертацию выделения либо последнего слова перед курсором.
+    public func perform(_ request: ConversionRequest) -> ConversionResult {
+        execute(request, transform: request.converted).result
+    }
+
+    /// Обёртка для диагностического режима; основной путь использует явный запрос.
     public func convert() -> Result<Outcome, AXConvertError> {
-        guard let element = focusedElement() else { return .failure(.noFocusedElement) }
-        guard !Self.isSecureField(element) else { return .failure(.secureField) }
-
-        if let selected = copyStringAttribute(kAXSelectedTextAttribute, from: element), !selected.isEmpty {
-            return replaceSelection(selected, in: element, wasSelection: true)
-        }
-        return convertLastWordBeforeCursor(in: element)
-    }
-
-    // MARK: - Внутренности
-
-    private func convertLastWordBeforeCursor(in element: AXUIElement) -> Result<Outcome, AXConvertError> {
-        guard let value = copyStringAttribute(kAXValueAttribute, from: element),
-              let selectionRange = copyRangeAttribute(kAXSelectedTextRangeAttribute, from: element),
-              let cursorNSRange = Range(selectionRange, in: value) else {
+        let execution = execute(ConversionRequest(), transform: transform)
+        switch execution.result {
+        case .success(let receipt):
+            return .success(Outcome(
+                original: receipt.original,
+                converted: receipt.converted,
+                wasSelection: execution.wasSelection
+            ))
+        case .blocked:
+            return .failure(.secureField)
+        case .unavailable:
             return .failure(.textUnavailable)
-        }
-        guard let wordRange = WordBoundary.lastWord(in: value, beforeCursor: cursorNSRange.lowerBound) else {
-            return .failure(.emptyWord)
-        }
-        // AX-позиции отсчитываются в UTF-16 — NSRange даёт их напрямую.
-        let wordNSRange = NSRange(wordRange, in: value)
-        guard setRangeAttribute(
-            kAXSelectedTextRangeAttribute,
-            CFRange(location: wordNSRange.location, length: wordNSRange.length),
-            on: element
-        ) else {
+        case .failed:
             return .failure(.writeFailed)
         }
-        let word = String(value[wordRange])
-        let result = replaceSelection(word, in: element, wasSelection: false)
-        // Electron и часть кастомных редакторов отвечают «успех», но вставляют
-        // текст у курсора вместо замены диапазона (спайк P0.2, Obsidian).
-        // Проверяем результат чтением: слово должно оказаться на своём месте.
-        if case .success(let outcome) = result,
-           !verifyWritten(outcome.converted, at: wordNSRange.location, in: element) {
-            return .failure(.writeFailed)
+    }
+
+    private func execute(
+        _ request: ConversionRequest,
+        transform: (String) -> String
+    ) -> (result: ConversionResult, wasSelection: Bool) {
+        guard request.isValid(), let element = access.focusedElement(),
+              !access.isProtected(element) else {
+            return (logged(.blocked, reason: "protected-or-invalid-context"), false)
         }
-        return result
+        guard let text = access.text(in: element), let selection = access.selection(in: element),
+              let plan = AXReplacementPlan(text: text, selection: selection, request: request, transform: transform)
+        else { return (logged(.unavailable, reason: "snapshot-or-plan-unavailable"), false) }
+        guard access.canReplaceText(in: element), access.canSetSelection(in: element) else {
+            return (logged(.unavailable, reason: "attributes-not-settable"), plan.wasSelection)
+        }
+        let result = replace(plan, in: element, request: request)
+        if !request.isValid() { cleanupAfterAbort(plan, in: element, request: request) }
+        return (result, plan.wasSelection)
     }
 
-    /// Проверка, что слово реально записалось в позицию `location` (UTF-16).
-    /// Если значение перечитать нельзя — верим записи (нечем проверить).
-    private func verifyWritten(_ expected: String, at location: Int, in element: AXUIElement) -> Bool {
-        guard let newValue = copyStringAttribute(kAXValueAttribute, from: element) else { return true }
-        let utf16 = newValue.utf16
-        let end = location + expected.utf16.count
-        guard location >= 0, end <= utf16.count else { return false }
-        let startIndex = utf16.index(utf16.startIndex, offsetBy: location)
-        let endIndex = utf16.index(utf16.startIndex, offsetBy: end)
-        return String(utf16[startIndex..<endIndex]) == expected
+    private func cleanupAfterAbort(_ plan: AXReplacementPlan, in element: AXUIElement, request: ConversionRequest) {
+        guard request.canCleanup(), let focused = access.focusedElement(), CFEqual(focused, element),
+              !access.isProtected(element), let text = access.text(in: element),
+              let selection = access.selection(in: element), request.canCleanup() else { return }
+        if text == plan.text && selection == plan.range && !plan.wasSelection {
+            _ = access.setSelection(plan.selection, in: element)
+        } else if text == plan.resultingText,
+                  selection == NSRange(location: plan.range.location, length: plan.replacement.utf16.count) {
+            _ = access.setSelection(plan.finalSelection, in: element)
+        }
     }
 
-    private func replaceSelection(
-        _ original: String,
+    private func replace(
+        _ plan: AXReplacementPlan,
         in element: AXUIElement,
-        wasSelection: Bool
-    ) -> Result<Outcome, AXConvertError> {
-        let converted = transform(original)
-        let error = AXUIElementSetAttributeValue(
-            element,
-            kAXSelectedTextAttribute as CFString,
-            converted as CFTypeRef
-        )
-        guard error == .success else { return .failure(.writeFailed) }
-        return .success(Outcome(original: original, converted: converted, wasSelection: wasSelection))
+        request: ConversionRequest
+    ) -> ConversionResult {
+        guard isCurrent(element, request: request),
+              access.text(in: element) == plan.text,
+              access.selection(in: element) == plan.selection else {
+            return logged(.blocked, reason: "snapshot-changed-before-selection")
+        }
+        guard request.beginMutation(), isCurrent(element, request: request) else {
+            return logged(.blocked, reason: "input-hold-unavailable")
+        }
+        if plan.range != plan.selection {
+            guard access.setSelection(plan.range, in: element) else {
+                let result = restoreSelection(plan, in: element, request: request)
+                return logged(result, reason: "selection-write-failed")
+            }
+        }
+        guard isCurrent(element, request: request), access.text(in: element) == plan.text else {
+            return logged(.blocked, reason: "context-changed-after-selection")
+        }
+        guard access.selection(in: element) == plan.range else {
+            let result = restoreSelection(plan, in: element, request: request)
+            return logged(result, reason: "selection-not-confirmed")
+        }
+        let written = access.replaceSelectedText(plan.replacement, in: element)
+        guard written else {
+            _ = recoverAfterWrite(plan, in: element, request: request)
+            return logged(.failed, reason: "text-write-failed")
+        }
+        return finishWrite(plan, in: element, request: request)
     }
 
-    private func copyStringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
-        return value as? String
+    private func finishWrite(
+        _ plan: AXReplacementPlan,
+        in element: AXUIElement,
+        request: ConversionRequest
+    ) -> ConversionResult {
+        guard isCurrent(element, request: request) else {
+            return logged(.failed, reason: "context-changed-after-write")
+        }
+        guard access.text(in: element) == plan.resultingText else {
+            let result = recoverAfterWrite(plan, in: element, request: request)
+            return logged(result, reason: "text-write-not-confirmed")
+        }
+        guard access.setSelection(plan.finalSelection, in: element) else {
+            return logged(.failed, reason: "final-caret-write-failed")
+        }
+        guard isCurrent(element, request: request),
+              access.text(in: element) == plan.resultingText,
+              access.selection(in: element) == plan.finalSelection else {
+            return logged(.failed, reason: "final-state-not-confirmed")
+        }
+        return logged(.success(plan.receipt), reason: "replacement-confirmed")
     }
 
-    private func copyRangeAttribute(_ attribute: String, from element: AXUIElement) -> NSRange? {
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
-              let axValue = value, CFGetTypeID(axValue) == AXValueGetTypeID() else { return nil }
-        var range = CFRange()
-        // swiftlint:disable:next force_cast
-        guard AXValueGetValue(axValue as! AXValue, .cfRange, &range) else { return nil }
-        return NSRange(location: range.location, length: range.length)
+    /// «Успешный» AX no-op разрешает fallback лишь после полного восстановления снимка.
+    private func recoverAfterWrite(
+        _ plan: AXReplacementPlan,
+        in element: AXUIElement,
+        request: ConversionRequest
+    ) -> ConversionResult {
+        guard isCurrent(element, request: request), let text = access.text(in: element) else { return .failed }
+        if text == plan.text {
+            return restoreSelection(plan, in: element, request: request)
+        }
+        // При иной записи текст не трогаем. Снимаем только узнаваемое собственное выделение.
+        guard let selection = access.selection(in: element),
+              let caret = plan.cleanupCaret(in: text, selection: selection),
+              isCurrent(element, request: request), access.text(in: element) == text,
+              access.selection(in: element) == selection else { return .failed }
+        let collapsed = access.setSelection(caret, in: element)
+        let verified = collapsed && access.selection(in: element) == caret
+        logger.info("AX cleanup изменённого текста: каретка подтверждена=\(verified, privacy: .public)")
+        return .failed
     }
 
-    private func setRangeAttribute(_ attribute: String, _ range: CFRange, on element: AXUIElement) -> Bool {
-        var mutableRange = range
-        guard let axValue = AXValueCreate(.cfRange, &mutableRange) else { return false }
-        return AXUIElementSetAttributeValue(element, attribute as CFString, axValue) == .success
+    private func isCurrent(_ element: AXUIElement, request: ConversionRequest) -> Bool {
+        guard request.isValid(), let focused = access.focusedElement(), CFEqual(focused, element) else {
+            return false
+        }
+        return !access.isProtected(element)
+    }
+
+    /// Fallback допустим только после подтверждения неизменного текста и исходного выделения.
+    private func restoreSelection(
+        _ plan: AXReplacementPlan,
+        in element: AXUIElement,
+        request: ConversionRequest
+    ) -> ConversionResult {
+        guard isCurrent(element, request: request), access.text(in: element) == plan.text else { return .blocked }
+        if access.selection(in: element) != plan.selection {
+            guard access.setSelection(plan.selection, in: element) else { return .failed }
+        }
+        guard isCurrent(element, request: request), access.text(in: element) == plan.text,
+              access.selection(in: element) == plan.selection else { return .failed }
+        return .unavailable
+    }
+
+    private func logged(_ result: ConversionResult, reason: String) -> ConversionResult {
+        let label: String
+        switch result {
+        case .success: label = "success"
+        case .unavailable: label = "unavailable"
+        case .blocked: label = "blocked"
+        case .failed: label = "failed"
+        }
+        logger.info("AX результат=\(label, privacy: .public), причина=\(reason, privacy: .public)")
+        return result
     }
 }

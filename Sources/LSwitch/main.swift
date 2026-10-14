@@ -10,6 +10,7 @@ import SwiftUI
 /// (AX-first, clipboard-fallback) и переключает раскладку, повторный —
 /// откат. Список исключений приложений, PermGuard, настройки, автозапуск.
 /// Диагностический режим спайков сохранён: `lswitch --probe`.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let logger = Logger(subsystem: "LSwitch", category: "App")
@@ -31,21 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let appProfiles = AppProfiles()
     private var detector = DoubleShiftDetector()
     private var eventTap: EventTapCore?
+    private var inputHoldingTap: EventTapCore?
     private lazy var converter = makeConverter()
+    private var inputGeneration: UInt64 = 0
 
     private var workspaceObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
 
-    /// Активное приложение — кэш, обновляемый на главном потоке по
-    /// нотификации NSWorkspace (сам NSWorkspace дёргать с фоновых очередей
-    /// нельзя, а перехват работает на своей).
-    private let frontmostLock = NSLock()
-    private var frontmostAppBundleID: String?
-
     private func currentFrontmostBundleID() -> String? {
-        frontmostLock.lock()
-        defer { frontmostLock.unlock() }
-        return frontmostAppBundleID
+        NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -58,7 +53,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.$undoWindowSeconds
             .assign(to: \.window, on: undoStore)
             .store(in: &cancellables)
+        settings.$enabled.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] enabled in
+            guard let self else { return }
+            if enabled { self.startInterception() } else { self.stopInterception() }
+            self.updateToggleItem()
+        }.store(in: &cancellables)
         logger.info("TIS источники: \(self.layoutManager.enabledSourceIDs())")
+    }
+
+    /// Повторное открытие menu-bar приложения даёт доступ к его настройкам.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        openSettings()
+        return true
     }
 
     // MARK: - Перехват → детект → конвертация
@@ -66,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startInterception() {
         guard eventTap == nil, settings.enabled else { return }
         let tap = EventTapCore { [weak self] raw in
-            self?.handleIntercepted(raw)
+            DispatchQueue.main.async { self?.handleIntercepted(raw) }
         }
         guard tap.start() else {
             logger.error("Event tap не запущен — нет разрешений?")
@@ -76,21 +82,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func stopInterception() {
+        resetInputContext()
         eventTap?.stop()
         eventTap = nil
     }
 
-    /// Вызывается на очереди обработки EventTapCore.
+    /// Callback tap передаёт сюда события на главный поток.
     private func handleIntercepted(_ raw: RawKeyEvent) {
-        if appRules.isBlocked(bundleID: currentFrontmostBundleID()) {
-            keystrokeBuffer.clear()
+        guard !raw.isSynthetic else { return }
+        guard settings.enabled, raw.type != .other,
+              !appRules.isBlocked(bundleID: currentFrontmostBundleID()),
+              let target = InputSafety.captureTarget() else {
+            resetInputContext()
             return
         }
         if detector.handle(raw) {
             // Ожидаемое слово из буфера — для точного выделения ⇧←×N
             // в clipboard-режиме (Electron гранулярности не доверяем).
             let word = keystrokeBuffer.lastWord()
+            let generation = inputGeneration
             Task { [converter, autoSwitch] in
+                guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
                 let outcome = await converter.trigger(expectedWord: word.isEmpty ? nil : word)
                 if case .undone = outcome {
                     // Откат автоконвертации — сигнал обучения (design D4).
@@ -99,11 +111,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     autoSwitch.clearPendingUndoCandidate()
                     self.keystrokeBuffer.clear()
                 }
-                self.logger.info("Хоткей: \(String(describing: outcome))")
+                self.logger.info("Хоткей: \(outcome.label, privacy: .public)")
             }
             return
         }
         if raw.type == .keyDown, !raw.isSynthetic {
+            inputGeneration &+= 1
             converter.notifyOtherKeystroke()
         }
         if let kind = classifier.classify(raw) {
@@ -111,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Триггер: разделители И пунктуация с маппингом («ghbdtn,» —
             // запятая и разделитель, и триггер; TZ.md F10).
             if settings.autoSwitchEnabled, isAutoSwitchTrigger(kind) {
-                maybeAutoConvert()
+                maybeAutoConvert(target: target)
             }
         }
     }
@@ -129,23 +142,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Автопереключение: разделитель набран, проверяем последнее слово.
-    /// Вызывается на очереди обработки EventTapCore.
-    private func maybeAutoConvert() {
-        let word = keystrokeBuffer.lastWordForAutoSwitch()
-        guard !word.isEmpty, autoSwitch.evaluate(word: word) != nil else { return }
-        logger.notice("Автоконвертация слова длиной \(word.count)")
+    /// Запрос содержит всё от начала слова до текущей каретки.
+    private func maybeAutoConvert(target: InputTarget) {
+        guard let context = keystrokeBuffer.lastWordContextForAutoSwitch(),
+              autoSwitch.evaluate(word: context.word) != nil else { return }
+        logger.notice("Автоконвертация слова длиной \(context.word.count)")
+        let generation = inputGeneration
         Task { [converter, autoSwitch] in
-            let outcome = await converter.trigger(expectedWord: word, allowUndo: false)
+            guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
+            let outcome = await converter.trigger(
+                expectedWord: context.word, trailingText: context.trailingText, allowUndo: false
+            )
             switch outcome {
             case .converted:
                 self.keystrokeBuffer.clear()
-            case .failed:
-                autoSwitch.clearPendingUndoCandidate()
             default:
-                break
+                autoSwitch.clearPendingUndoCandidate()
             }
-            self.logger.info("Автоконвертация: \(String(describing: outcome))")
+            self.logger.info("Автоконвертация: \(outcome.label, privacy: .public)")
         }
+    }
+
+    private func resetInputContext() {
+        inputGeneration &+= 1
+        keystrokeBuffer.clear()
+        detector = DoubleShiftDetector()
+        converter.notifyOtherKeystroke()
+        autoSwitch.clearPendingUndoCandidate()
     }
 
     private func makeConverter() -> Converter {
@@ -155,6 +178,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
             prefersClipboard: { [appProfiles] in appProfiles.prefersClipboard(bundleID: $0) },
+            beginInputHold: { [weak self] in
+                guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
+                self.inputHoldingTap = tap
+                return true
+            },
+            endInputHold: { [weak self] in
+                self?.inputHoldingTap?.endInputHold()
+                self?.inputHoldingTap = nil
+            },
+            isInputHoldValid: { [weak self] in self?.inputHoldingTap?.isInputHeld == true },
+            onLayoutSwitched: { [weak self] source, target, startedAt in
+                self?.eventTap?.recordLayoutChange(from: source, to: target, since: startedAt)
+            },
             onConverted: { [weak self] in
                 guard let self, self.settings.soundEnabled else { return }
                 DispatchQueue.main.async {
@@ -190,24 +226,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Смена активного приложения очищает буфер ввода (spec app-rules)
-    /// и обновляет кэш frontmost (нотификация приходит на главном потоке).
+    /// Смена приложения завершает прежний контекст ввода и отмены.
     private func observeWorkspace() {
-        frontmostLock.lock()
-        frontmostAppBundleID = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        frontmostLock.unlock()
         workspaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
-            guard let self else { return }
-            let bundleID = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?
-                .bundleIdentifier
-            self.frontmostLock.lock()
-            self.frontmostAppBundleID = bundleID
-            self.frontmostLock.unlock()
-            self.keystrokeBuffer.clear()
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.resetInputContext() }
         }
     }
 
@@ -260,12 +286,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleEnabled() {
         settings.enabled.toggle()
-        if settings.enabled {
-            startInterception()
-        } else {
-            stopInterception()
-        }
-        updateToggleItem()
     }
 
     @objc private func openSettings() {
@@ -294,13 +314,24 @@ extension AppDelegate: NSMenuDelegate {
     }
 }
 
+if CommandLine.arguments.contains("--verify-resources") {
+    let dictionaries = DictionaryStore()
+    let available = dictionaries.contains("привет", language: .russian)
+        && dictionaries.contains("hello", language: .english)
+    print("resources: \(DictionaryStore.resourceBundle.bundleURL.path)")
+    print("dictionaries: \(available ? "ok" : "missing")")
+    exit(available ? 0 : 1)
+}
+
 if CommandLine.arguments.contains("--probe") {
     Probe.run()
 }
 
-let app = NSApplication.shared
-let delegate = AppDelegate()
-app.delegate = delegate
-// Агент строки меню: без иконки в Dock.
-app.setActivationPolicy(.accessory)
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate()
+    app.delegate = delegate
+    // Агент строки меню: без иконки в Dock.
+    app.setActivationPolicy(.accessory)
+    withExtendedLifetime(delegate) { app.run() }
+}

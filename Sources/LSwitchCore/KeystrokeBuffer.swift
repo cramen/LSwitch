@@ -88,11 +88,44 @@ public final class KeystrokeBuffer: @unchecked Sendable {
     /// разделители и обрезает хвостовую пунктуацию («ghbdtn,» → «ghbdtn»),
     /// но сохраняет раскладочные символы внутри слова («rf;tncz»).
     public func lastWordForAutoSwitch() -> String {
-        var word = lastWordBeforeDelimiter()
-        while let last = word.last, !last.isLetter {
-            word.removeLast()
+        lastWordContextForAutoSwitch()?.word ?? ""
+    }
+
+    public struct WordContext: Equatable, Sendable {
+        public let word: String
+        public let trailingText: String
+    }
+
+    /// Снимок слова и хвоста атомарен; цифры остаются в слове для эвристик.
+    public func lastWordContextForAutoSwitch() -> WordContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        var letters: [Character] = []
+        var delimiters: [Character] = []
+        for keystroke in storage.reversed() {
+            switch keystroke.kind {
+            case .character(let character):
+                letters.append(character)
+            case .delimiter(let character):
+                guard letters.isEmpty else {
+                    return makeWordContext(letters: letters, delimiters: delimiters)
+                }
+                delimiters.append(character)
+            case .control:
+                return nil
+            }
         }
-        return word
+        return makeWordContext(letters: letters, delimiters: delimiters)
+    }
+
+    private func makeWordContext(letters: [Character], delimiters: [Character]) -> WordContext? {
+        var word = String(letters.reversed())
+        var tail = String(delimiters.reversed())
+        while let last = word.last, !last.isLetter, !last.isNumber {
+            tail.insert(word.removeLast(), at: tail.startIndex)
+        }
+        guard !word.isEmpty else { return nil }
+        return WordContext(word: word, trailingText: tail)
     }
 
     /// Удаляет последний разделитель (если он есть) — после автоконвертации

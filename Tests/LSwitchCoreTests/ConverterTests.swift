@@ -1,168 +1,182 @@
 @testable import LSwitchCore
 import XCTest
 
-/// Мок-движок конвертации: возвращает заданный результат, считает вызовы.
-final class StubEngine: ConversionEngine, @unchecked Sendable {
-    var result: (original: String, converted: String)?
-    var calls = 0
-
-    func perform() async -> (original: String, converted: String)? {
-        calls += 1
-        return result
-    }
-}
-
 final class ConverterTests: XCTestCase {
-
-    private var axEngine: StubEngine!
-    private var clipboardEngine: StubEngine!
-    private var currentLayout: Layout?
-    private var switchedTo: [Layout]!
-    private var bundleID: String?
-    private var undoStore: UndoStore!
-    private var appRules: AppRules!
-    private var converter: Converter!
-
-    override func setUp() {
-        let axStub = StubEngine()
-        let clipboardStub = StubEngine()
-        axEngine = axStub
-        clipboardEngine = clipboardStub
-        currentLayout = .english
-        switchedTo = []
-        bundleID = "com.example.TextEdit"
-        undoStore = UndoStore()
-        appRules = AppRules(defaults: Self.freshDefaults())
-        converter = Converter(
-            currentLayout: { [weak self] in self?.currentLayout },
-            switchLayout: { [weak self] in self?.switchedTo.append($0) },
-            appRules: appRules,
-            undoStore: undoStore,
-            frontmostBundleID: { [weak self] in self?.bundleID },
-            makeAXEngine: { axStub },
-            makeClipboardEngine: { _ in clipboardStub }
-        )
+    @MainActor
+    func testSafariAvoidsUnreliableAXWrites() async {
+        XCTAssertTrue(AppProfiles().prefersClipboard(bundleID: "com.apple.Safari"))
     }
 
-    private static func freshDefaults() -> UserDefaults {
-        let suite = "lswitch.tests.\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suite) else {
-            fatalError("Не удалось создать тестовый UserDefaults")
-        }
-        return defaults
+    func testManualSelectionUsesTextLanguageAndPreservesMixedConversion() {
+        let request = ConversionRequest(sourceLayout: .english)
+        XCTAssertEqual(request.converted("руддщ"), "hello")
+        XCTAssertEqual(request.targetLayout(for: "руддщ"), .english)
+        XCTAssertEqual(request.converted("ghbdtn руддщ"), "привет hello")
+        XCTAssertEqual(request.converted("/"), ".")
     }
 
+    @MainActor
     func testAXSuccessCachesModeAndSwitchesLayout() async {
-        axEngine.result = ("ghbdtn", "привет")
-        let outcome = await converter.trigger()
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.axEngine)
+        let outcome = await fixture.converter.trigger()
         XCTAssertEqual(outcome, .converted(original: "ghbdtn", converted: "привет"))
-        XCTAssertEqual(converter.modeCache["com.example.TextEdit"], .accessibility)
-        XCTAssertEqual(clipboardEngine.calls, 0)
-        XCTAssertEqual(switchedTo, [.russian])
+        XCTAssertEqual(fixture.converter.modeCache["com.example.TextEdit"], .accessibility)
+        XCTAssertTrue(fixture.clipboardEngine.requests.isEmpty)
+        XCTAssertEqual(fixture.switchedTo, [.russian])
+        XCTAssertEqual(fixture.transitions.first?.source, .english)
+        XCTAssertEqual(fixture.transitions.first?.target, .russian)
+        XCTAssertGreaterThan(fixture.transitions.first?.startedAt ?? 0, 0)
     }
 
-    func testAXFailureFallsBackToClipboardAndCaches() async {
-        axEngine.result = nil
-        clipboardEngine.result = ("ghbdtn", "привет")
-        let outcome = await converter.trigger()
-        XCTAssertEqual(outcome, .converted(original: "ghbdtn", converted: "привет"))
-        XCTAssertEqual(converter.modeCache["com.example.TextEdit"], .clipboard)
-
-        // Второй вызов идёт сразу в clipboard, AX не дёргается.
-        axEngine.calls = 0
-        clipboardEngine.result = nil
-        _ = await converter.trigger()
-        XCTAssertEqual(axEngine.calls, 0)
+    @MainActor
+    func testUnconfirmedLayoutSwitchDoesNotCorrectQueuedInput() async {
+        let fixture = ConverterFixture()
+        fixture.switchSucceeds = false
+        fixture.succeed(fixture.axEngine)
+        _ = await fixture.converter.trigger()
+        XCTAssertTrue(fixture.transitions.isEmpty)
     }
 
-    func testBothEnginesFail() async {
-        let outcome = await converter.trigger()
+    @MainActor
+    func testAlreadyCorrectLayoutDoesNotCorrectQueuedInput() async {
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.axEngine, original: "руддщ", converted: "hello")
+        _ = await fixture.converter.trigger()
+        XCTAssertEqual(fixture.switchedTo, [.english])
+        XCTAssertTrue(fixture.transitions.isEmpty)
+    }
+
+    @MainActor
+    func testUnavailableFallsBackAndCachesOnlySuccessfulClipboard() async {
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.clipboardEngine)
+        _ = await fixture.converter.trigger()
+        XCTAssertEqual(fixture.converter.modeCache["com.example.TextEdit"], .clipboard)
+        fixture.converter.notifyOtherKeystroke()
+        _ = await fixture.converter.trigger()
+        XCTAssertEqual(fixture.axEngine.requests.count, 1)
+    }
+
+    @MainActor
+    func testFailedOrBlockedAXDoesNotTryClipboard() async {
+        for result: ConversionResult in [.blocked, .failed] {
+            let fixture = ConverterFixture()
+            fixture.axEngine.result = result
+            fixture.succeed(fixture.clipboardEngine)
+            _ = await fixture.converter.trigger()
+            XCTAssertTrue(fixture.clipboardEngine.requests.isEmpty)
+            XCTAssertTrue(fixture.switchedTo.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testBothUnavailableDoNotPoisonCache() async {
+        let fixture = ConverterFixture()
+        let outcome = await fixture.converter.trigger()
         XCTAssertEqual(outcome, .failed)
-        // Провал AX запоминается как «ненадёжен» — повторных попыток AX нет,
-        // чтобы не портить текст в приложениях с молчащей AX-записью.
-        XCTAssertEqual(converter.modeCache["com.example.TextEdit"], .clipboard)
+        XCTAssertTrue(fixture.converter.modeCache.isEmpty)
     }
 
-    func testPrefersClipboardSkipsAX() async {
-        let clipboardFirst = Converter(
-            currentLayout: { [weak self] in self?.currentLayout },
-            switchLayout: { [weak self] in self?.switchedTo.append($0) },
-            appRules: appRules,
-            undoStore: undoStore,
-            frontmostBundleID: { [weak self] in self?.bundleID },
-            prefersClipboard: { _ in true },
-            makeAXEngine: { [axEngine] in axEngine ?? StubEngine() },
-            makeClipboardEngine: { [clipboardEngine] _ in clipboardEngine ?? StubEngine() }
-        )
-        clipboardEngine.result = ("ghbdtn", "привет")
-        let outcome = await clipboardFirst.trigger()
-        XCTAssertEqual(outcome, .converted(original: "ghbdtn", converted: "привет"))
-        XCTAssertEqual(axEngine.calls, 0, "AX не должен вызываться для Electron-приложений")
+    @MainActor
+    func testClipboardProfileStillHonorsSafety() async {
+        let fixture = ConverterFixture()
+        fixture.clipboardPreferred = true
+        fixture.safe = false
+        let outcome = await fixture.converter.trigger()
+        XCTAssertEqual(outcome, .blockedBySafety)
+        XCTAssertTrue(fixture.axEngine.requests.isEmpty)
+        XCTAssertTrue(fixture.clipboardEngine.requests.isEmpty)
     }
 
-    func testBlockedApp() async {
-        bundleID = "com.apple.Terminal"
-        axEngine.result = ("a", "ф")
-        let outcome = await converter.trigger()
-        XCTAssertEqual(outcome, .blockedByRules)
-        XCTAssertEqual(axEngine.calls, 0)
+    @MainActor
+    func testBlockedAppAndUnsupportedLayoutNeverCallEngines() async {
+        let fixture = ConverterFixture()
+        fixture.bundleID = "com.apple.Terminal"
+        let blocked = await fixture.converter.trigger()
+        XCTAssertEqual(blocked, .blockedByRules)
+        fixture.bundleID = "com.example.TextEdit"
+        fixture.layout = nil
+        let unsupported = await fixture.converter.trigger()
+        XCTAssertEqual(unsupported, .unsupportedLayout)
+        XCTAssertTrue(fixture.axEngine.requests.isEmpty)
+        XCTAssertTrue(fixture.clipboardEngine.requests.isEmpty)
     }
 
-    func testUnsupportedLayout() async {
-        currentLayout = nil
-        let outcome = await converter.trigger()
-        XCTAssertEqual(outcome, .unsupportedLayout)
-        XCTAssertEqual(axEngine.calls, 0)
-    }
-
-    // MARK: - Откат
-
-    func testUndoWithinWindow() async {
-        axEngine.result = ("ghbdtn", "привет")
-        _ = await converter.trigger()
-        XCTAssertEqual(switchedTo, [.russian])
-
-        axEngine.result = ("привет", "ghbdtn")
-        let outcome = await converter.trigger()
+    @MainActor
+    func testUndoUsesExactOriginalAndTail() async throws {
+        let fixture = ConverterFixture()
+        fixture.axEngine.result = .success(ConversionReceipt(original: "/", converted: ".", trailingText: " "))
+        _ = await fixture.converter.trigger(expectedWord: "/", trailingText: " ")
+        fixture.axEngine.result = .success(ConversionReceipt(original: ".", converted: "/", trailingText: " "))
+        let outcome = await fixture.converter.trigger()
+        let request = try XCTUnwrap(fixture.axEngine.requests.last)
         XCTAssertEqual(outcome, .undone)
-        XCTAssertEqual(switchedTo, [.russian, .english])
+        XCTAssertEqual(request.expectedWord, ".")
+        XCTAssertEqual(request.replacement, "/")
+        XCTAssertEqual(request.trailingText, " ")
+        XCTAssertFalse(request.useSelection)
+        XCTAssertEqual(fixture.switchedTo, [.russian, .english])
     }
 
-    func testOtherKeystrokeInvalidatesUndo() async {
-        axEngine.result = ("ghbdtn", "привет")
-        _ = await converter.trigger()
-        converter.notifyOtherKeystroke()
-
-        axEngine.result = ("yjdf", "нова")
-        let outcome = await converter.trigger()
-        // Откат сброшен — это новая конвертация, а не undo.
-        XCTAssertEqual(outcome, .converted(original: "yjdf", converted: "нова"))
+    @MainActor
+    func testDifferentFieldPreventsUndo() async {
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.axEngine)
+        _ = await fixture.converter.trigger()
+        fixture.contextValid = false
+        let outcome = await fixture.converter.trigger()
+        XCTAssertEqual(outcome, .blockedBySafety)
+        XCTAssertEqual(fixture.axEngine.requests.count, 1)
     }
 
-    func testUndoPassesConvertedWordToClipboardEngine() async {
-        final class WordBox: @unchecked Sendable { var word: String? }
-        let box = WordBox()
-        let capturing = Converter(
-            currentLayout: { [weak self] in self?.currentLayout },
-            switchLayout: { [weak self] in self?.switchedTo.append($0) },
-            appRules: appRules,
-            undoStore: undoStore,
-            frontmostBundleID: { [weak self] in self?.bundleID },
-            prefersClipboard: { _ in true },
-            makeAXEngine: { [axEngine] in axEngine ?? StubEngine() },
-            makeClipboardEngine: { [clipboardEngine] word in
-                box.word = word
-                return clipboardEngine ?? StubEngine()
-            }
-        )
-        clipboardEngine.result = ("ghbdtn", "привет")
-        _ = await capturing.trigger(expectedWord: "ghbdtn")
-        XCTAssertEqual(box.word, "ghbdtn")
+    @MainActor
+    func testOtherKeystrokeInvalidatesUndoAndCurrentRequest() async {
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.axEngine)
+        _ = await fixture.converter.trigger()
+        let request = fixture.axEngine.requests[0]
+        fixture.converter.notifyOtherKeystroke()
+        XCTAssertFalse(request.isValid())
+        XCTAssertNil(fixture.undoStore.pendingUndo())
+    }
 
-        // Откат: на экране конвертированное слово — оно и ожидаемое.
-        clipboardEngine.result = ("привет", "ghbdtn")
-        _ = await capturing.trigger()
-        XCTAssertEqual(box.word, "привет")
+    @MainActor
+    func testAutoRequestIncludesDelimiterAndIgnoresSelection() async throws {
+        let fixture = ConverterFixture()
+        fixture.succeed(fixture.axEngine)
+        _ = await fixture.converter.trigger(expectedWord: "ghbdtn", trailingText: ",", allowUndo: false)
+        let request = try XCTUnwrap(fixture.axEngine.requests.first)
+        XCTAssertEqual(request.expectedSpan, "ghbdtn,")
+        XCTAssertFalse(request.useSelection)
+        XCTAssertEqual(request.sourceLayout, .english)
+    }
+
+    @MainActor
+    func testOverlappingRequestIsRejected() async {
+        let fixture = ConverterFixture()
+        var nested: Converter.Outcome?
+        fixture.axEngine.handler = { _ in
+            nested = await fixture.converter.trigger()
+            return .success(ConversionReceipt(original: "ghbdtn", converted: "привет"))
+        }
+        _ = await fixture.converter.trigger()
+        XCTAssertEqual(nested, .busy)
+        XCTAssertEqual(fixture.axEngine.requests.count, 1)
+        XCTAssertFalse(fixture.converter.isBusy)
+    }
+
+    @MainActor
+    func testInvalidationDuringAXDoesNotStartFallback() async {
+        let fixture = ConverterFixture()
+        fixture.axEngine.handler = { _ in
+            fixture.converter.notifyOtherKeystroke()
+            return .unavailable
+        }
+        let outcome = await fixture.converter.trigger()
+        XCTAssertEqual(outcome, .blockedBySafety)
+        XCTAssertTrue(fixture.clipboardEngine.requests.isEmpty)
+        XCTAssertTrue(fixture.switchedTo.isEmpty)
     }
 
     func testUndoWindowExpiry() {
@@ -172,8 +186,6 @@ final class ConverterTests: XCTestCase {
         store.save(UndoRecord(original: "a", converted: "ф", layoutBefore: .english, timestamp: now))
         XCTAssertNotNil(store.pendingUndo())
         now = now.addingTimeInterval(4)
-        XCTAssertNil(store.pendingUndo())
-        // Просроченная запись удаляется — повторный запрос тоже nil.
         XCTAssertNil(store.pendingUndo())
     }
 }

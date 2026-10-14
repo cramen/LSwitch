@@ -13,7 +13,19 @@ public final class DictionaryStore: Sendable {
     public convenience init() {
         // Bundle.module генерируется SwiftPM как internal — доступен только
         // внутри модуля, поэтому не может быть значением по умолчанию.
-        self.init(bundle: .module)
+        self.init(bundle: Self.resourceBundle)
+    }
+
+    /// В .app ресурсы обязаны быть внутри бандла; SwiftPM build-path там не используется.
+    public static var resourceBundle: Bundle {
+        if Bundle.main.bundleURL.pathExtension == "app" {
+            if let resourceURL = Bundle.main.resourceURL,
+               let bundle = Bundle(url: resourceURL.appendingPathComponent("LSwitch_LSwitchCore.bundle")) {
+                return bundle
+            }
+            return Bundle.main
+        }
+        return .module
     }
 
     public init(bundle: Bundle) {

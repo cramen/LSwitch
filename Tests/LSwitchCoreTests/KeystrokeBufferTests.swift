@@ -1,6 +1,29 @@
 @testable import LSwitchCore
 import XCTest
 
+final class AutoWordContextTests: XCTestCase {
+    func testPunctuationAndSpaceRemainInTail() {
+        let buffer = KeystrokeBuffer()
+        let classifier = KeystrokeClassifier()
+        for character in "rf;tncz, " {
+            buffer.append(Keystroke(kind: classifier.classify(character: character)))
+        }
+        let context = buffer.lastWordContextForAutoSwitch()
+        XCTAssertEqual(context?.word, "rf;tncz")
+        XCTAssertEqual(context?.trailingText, ", ")
+    }
+
+    func testDigitsRemainInWordForPasswordHeuristic() {
+        let buffer = KeystrokeBuffer()
+        let classifier = KeystrokeClassifier()
+        for character in "ghbdtn1 " {
+            buffer.append(Keystroke(kind: classifier.classify(character: character)))
+        }
+        XCTAssertEqual(buffer.lastWordForAutoSwitch(), "ghbdtn1")
+        XCTAssertFalse(WordClassifier.passesHeuristics(buffer.lastWordForAutoSwitch()))
+    }
+}
+
 final class KeystrokeBufferTests: XCTestCase {
 
     var buffer: KeystrokeBuffer!

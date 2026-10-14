@@ -22,6 +22,32 @@ final class SyntheticEventMarkerTests: XCTestCase {
         event.setIntegerValueField(.eventSourceUserData, value: 42)
         XCTAssertFalse(SyntheticEventMarker.isSynthetic(event))
     }
+
+    func testTagReplacesPreviouslyAssignedSourceData() throws {
+        for original: Int64 in [0, 42] {
+            let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 13, keyDown: true))
+            event.setIntegerValueField(.eventSourceUserData, value: original)
+            XCTAssertTrue(SyntheticEventMarker.tag(event))
+            XCTAssertEqual(event.getIntegerValueField(.eventSourceUserData), SyntheticEventMarker.magic)
+            XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), 13)
+            XCTAssertEqual(event.type, .keyDown)
+        }
+    }
+
+    func testTagSurvivesCopyAndCanRetagDeserializedEvent() throws {
+        let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 13, keyDown: true))
+        event.setIntegerValueField(.eventSourceUserData, value: 0)
+        XCTAssertTrue(SyntheticEventMarker.tag(event))
+        let copied = try XCTUnwrap(event.copy())
+        XCTAssertTrue(SyntheticEventMarker.isSynthetic(copied))
+        let data = try XCTUnwrap(event.data)
+        let restored = try XCTUnwrap(CGEvent(withDataAllocator: nil, data: data))
+        // macOS 14.5 не сохраняет source userData при flatten/unflatten, даже для значения 42.
+        // Повторная маркировка собственного восстановленного события должна быть надёжной.
+        XCTAssertTrue(SyntheticEventMarker.tag(restored))
+        XCTAssertEqual(restored.getIntegerValueField(.eventSourceUserData), SyntheticEventMarker.magic)
+        XCTAssertTrue(SyntheticEventMarker.isSynthetic(restored))
+    }
 }
 
 final class KeystrokeClassifierTests: XCTestCase {
@@ -96,11 +122,12 @@ final class KeystrokeClassifierTests: XCTestCase {
 /// Настоящая проверка перехвата — ручной чек-лист спайка P0.1.
 final class EventTapCoreIntegrationTests: XCTestCase {
 
+    @MainActor
     func testTapReceivesPostedEvent() async throws {
         let received = expectation(description: "Обычное событие получено")
         received.assertForOverFulfill = false
         let tap = EventTapCore { raw in
-            guard raw.type == .keyDown, raw.keyCode == 0x21 else { return }
+            guard raw.type == .keyUp, raw.keyCode == 0x21 else { return }
             received.fulfill()
         }
         guard tap.start() else {
@@ -109,7 +136,8 @@ final class EventTapCoreIntegrationTests: XCTestCase {
         defer { tap.stop() }
 
         let source = CGEventSource(stateID: .hidSystemState)
-        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0x21, keyDown: true) else {
+        // Отпускание проверяет доставку, не печатая символ в активное пользовательское окно.
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0x21, keyDown: false) else {
             XCTFail("Не удалось создать CGEvent")
             return
         }
