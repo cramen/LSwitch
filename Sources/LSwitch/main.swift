@@ -339,6 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusMenu.update(enabled: settings.enabled, status: permGuard.current)
     }
 
+}
+
+extension AppDelegate {
     @objc private func openSettings() {
         if settingsWindow == nil {
             let view = SettingsView(settings: settings, appRules: appRules, personalDictionary: personalDictionary)
