@@ -445,7 +445,7 @@ SHA `3711cb2ceb1d13f217ad5c71d85b6531cd24915a52bedde319dc93ce0afa51d4`,
 DEBUG unicodeChrome, `.build/acceptance-513-unicode-chrome.jsonl`.
 Review изменения seed замечаний не выявил; устранены повторы guards, но сохранены
 границы проверок, два readback через 20 мс, максимум четыре и cleanup.
-Default UnicodeOFF; своего CI 513 ещё нет, прежний green489 не переносится.
+Default Unicode OFF; своего CI 513 ещё нет, прежний green489 не переносится.
 
 Первый ENauto 256,523958 мс дал точное `привет ` с ASCII-пробелом, TISRU,
 но превысил 200 мс. Engine 209,087459 мс, current/identity/snapshot 60/20/9 вызовов.
@@ -492,10 +492,18 @@ editableRoot=false, documentRoot=true, отказ unicodeSnapshotUnverified, п�
 были фоновые пользовательские конверсии Codex (не acceptance), поэтому count
 за всю 513b неизменным не объявляется. Unicode-путь clipboard сам не использует.
 
-Перед checkpoint запущен normal513b без test-engine, PID62093/start14:45:49Z,
-`.build/acceptance-513b-normal.jsonl`, прежний SHA7f52d970… . CUA подтвердил перед
+Перед checkpoint запущен normal 513b без test-engine, PID 62093/start14:45:49Z,
+`.build/acceptance-513b-normal.jsonl`, прежний SHA 7f52d970… . CUA подтвердил перед
 restart autoOFF/enabledON/soundON/loginOFF/undo3с/learning2/empty personal exceptions.
-Punto/Caramba не запущены; LSwitch оставлен включённым. Аудитор87281 завершён
-exit0, originalemptyhash338a3d… matchestrue приcount3238; restore-write не нужен.
+Punto/Caramba не запущены; LSwitch оставлен включённым. Аудитор 87281 завершён
+exit 0, originalemptyhash338a3d… matchestrue приcount 3238; restore-write не нужен.
 Фоновые операции пользователя не позволяют утверждать постоянныйcount всей сессии.
-Проверкаcheckpoint не закрывает всю работу; нестабильныйrichundo исследуется дальше.
+Проверка checkpoint не закрывает всю работу; нестабильный rich undo исследуется дальше.
+
+Последующий [CI `2331661`](https://github.com/cramen/LSwitch/actions/runs/38756602714)
+прошёл build, 513 тестов без ошибок/пропусков и SwiftLint strict без нарушений
+в 148 файлах (18:02:18 МСК). Отдельный pure-model reproducer реального Core 513b
+подтвердил P1: select(7) → постоянный count=999 → failed/Down=0 → release с собственным
+range(0,7) → следующий ввод затирает оригинал; healthy control проходит.
+Exit 0 reproducer — подтверждение дефекта, не safety PASS. Полный след/hash сохранён
+в D11.P1 и общем протоколе. Pending/Right не внедрены; default Unicode OFF.
