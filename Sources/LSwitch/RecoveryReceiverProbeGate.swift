@@ -1,6 +1,7 @@
 #if DEBUG
 import CoreGraphics
 import Foundation
+import LSwitchCore
 
 /// Изолированный own-PID gate пробника. Не используется как production admission.
 final class RecoveryReceiverProbeGate: @unchecked Sendable {
@@ -24,6 +25,8 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
     private let finished = DispatchSemaphore(value: 0)
     private let tailPairObserved = DispatchSemaphore(value: 0)
     private let allowsPairedUpAfterClose: Bool
+    private let usesRegistry: Bool
+    private let registry: RecoveryRecipientProbeBridge?
     private var headTap: CFMachPort?
     private var tailTap: CFMachPort?
     private var generationClosed = false
@@ -36,12 +39,21 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
     private var disableNotifications = 0
     private var balancedUpCount = 0
 
-    init(allowsPairedUpAfterClose: Bool = false) {
+    @MainActor
+    init(allowsPairedUpAfterClose: Bool = false, usesRegistry: Bool = false) {
         self.allowsPairedUpAfterClose = allowsPairedUpAfterClose
+        self.usesRegistry = usesRegistry
+        if usesRegistry, let bridge = RecoveryRecipientProbeBridge.makeOwnProcess(),
+           bridge.preparePair(keyCode: 0, downFlags: 0, releaseFlags: 0) {
+            registry = bridge
+        } else {
+            registry = nil
+        }
     }
 
     /// До releaseAdmissions worker не обслуживает callbacks: можно закрыть уже отправленное поколение.
     func start() -> Bool {
+        guard !usesRegistry || registry != nil else { return false }
         let worker = Thread { [self] in threadMain() }
         worker.name = "LSwitch.recovery-receiver-probe"
         worker.start()
@@ -53,6 +65,7 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
     func closeGeneration() {
         lock.lock()
         generationClosed = true
+        registry?.closeGeneration()
         lock.unlock()
     }
 
@@ -67,6 +80,7 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         guard let headTap, !stopping else { return false }
+        registry?.markLost()
         CGEvent.tapEnable(tap: headTap, enable: false)
         return !CGEvent.tapIsEnabled(tap: headTap)
     }
@@ -75,6 +89,7 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
     func stop() -> Bool {
         lock.lock()
         stopping = true
+        registry?.markLost()
         lock.unlock()
         admissionBarrier.signal()
         return finished.wait(timeout: .now() + .milliseconds(250)) == .success
@@ -94,6 +109,14 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
 
     func eventLabel(_ event: CGEvent) -> String? {
         let marker = event.getIntegerValueField(.eventSourceUserData)
+        if let registry {
+            guard registry.owns(senderPID: event.getIntegerValueField(.eventSourceUnixProcessID), marker: marker) else {
+                return nil
+            }
+            if marker == registry.marker(isDown: true), event.type == .keyDown { return "down" }
+            if marker == registry.marker(isDown: false), event.type == .keyUp { return "up" }
+            return nil
+        }
         if marker == markerBase, event.type == .keyDown { return "down" }
         if marker == markerBase + 1, event.type == .keyUp { return "up" }
         return nil
@@ -104,13 +127,28 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
         defer { lock.unlock() }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             disableNotifications += 1
+            registry?.markLost()
             return true
         }
-        // Не извлекаем keycode, Unicode или flags неизвестных событий.
-        guard let label = eventLabel(event) else { return true }
         if admitted.count + blocked.count + tail.count >= 16 {
             failure = "observation_limit"
+            registry?.markLost()
             return !isHead
+        }
+        let label = eventLabel(event)
+        if isHead, let registry, registry.owns(
+            senderPID: event.getIntegerValueField(.eventSourceUnixProcessID),
+            marker: event.getIntegerValueField(.eventSourceUserData)
+        ) {
+            // Собственный marker с неверным phase тоже обязан пройти shape validation, даже для keyUp.
+            return admitRegistryLocked(registry, event: event, label: label ?? "malformed")
+        }
+        // Не извлекаем keycode, Unicode или flags неизвестных событий.
+        guard let label else {
+            guard isHead, type == .keyDown, let registry else { return true }
+            let decision = registry.observeUnmatchedTargetDown()
+            registry.recordCallbackReturn(decision, returnedNil: !decision.allowsEvent)
+            return decision.allowsEvent
         }
         if isHead {
             return admitHeadLocked(label)
@@ -118,6 +156,48 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
         tail.append(label)
         if tail == ["down", "up"] { tailPairObserved.signal() }
         return true
+    }
+
+    private func admitRegistryLocked(
+        _ registry: RecoveryRecipientProbeBridge, event: CGEvent, label: String
+    ) -> Bool {
+        let decision = registry.observeOwn(
+            senderPID: event.getIntegerValueField(.eventSourceUnixProcessID),
+            marker: event.getIntegerValueField(.eventSourceUserData),
+            phase: event.type == .keyDown ? .keyDown : .keyUp,
+            keyCode: UInt16(clamping: event.getIntegerValueField(.keyboardEventKeycode)),
+            modifierFlags: event.flags.rawValue
+        )
+        if decision.allowsEvent {
+            admitted.append(label)
+            if generationClosed && label == "up" { balancedUpCount += 1 }
+        } else {
+            blocked.append(label)
+        }
+        registry.recordCallbackReturn(decision, returnedNil: !decision.allowsEvent)
+        return decision.allowsEvent
+    }
+
+    @MainActor
+    func activateRegistry() -> Bool { !usesRegistry || registry?.activateProtection() == true }
+
+    func marker(isDown: Bool) -> Int64? {
+        usesRegistry ? registry?.marker(isDown: isDown) : markerBase + (isDown ? 0 : 1)
+    }
+
+    @MainActor
+    func registerBeforePost(isDown: Bool) -> Bool {
+        !usesRegistry || registry?.registerBeforePost(isDown: isDown) == true
+    }
+
+    @MainActor
+    func recordPostReturned(isDown: Bool) { registry?.recordPostReturned(isDown: isDown) }
+
+    @MainActor
+    func drainRegistry() -> RecoveryRecipientProbeSnapshot? {
+        let state = snapshot()
+        if !state.headEnabled || !state.tailEnabled { registry?.markLost() }
+        return registry?.drainObservations()
     }
 
     /// Вызывается только под lock. Исключение относится к единственной собственной паре этого probe.
@@ -147,6 +227,7 @@ final class RecoveryReceiverProbeGate: @unchecked Sendable {
         var sources: [CFRunLoopSource] = []
         defer {
             lock.lock()
+            registry?.markLost()
             for tap in [headTap, tailTap].compactMap({ $0 }) {
                 CGEvent.tapEnable(tap: tap, enable: false)
                 CFMachPortInvalidate(tap)

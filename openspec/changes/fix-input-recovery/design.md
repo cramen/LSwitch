@@ -263,10 +263,18 @@ MainActor переносит их в ledger. Ни tail, ни окно наблю
 выключает head и снимает barrier. Полученная доставка остаётся fail-open ограничением,
 а не положительной приёмкой. Production factory по-прежнему unavailable.
 
+Наблюдение v2 уточнило предел disable: уже queued callback может исполниться после
+выключения head. В проверенной паре Down был заблокирован этим callback, а Up прошёл
+в tail/NSTextView; текст не изменился. Требование bypass обеих клавиш было ошибочной
+гипотезой первого probe. V2 проверяет точное разбиение отправленной пары, порядок
+tail==receiver и эффект фактически полученного Down. Lost сохраняет ledger
+Prevented=0, Unknown=1, Unresolved=2; это не ACK или разрешение replay.
+Локаторы обоих протоколов и SHA сохранены в acceptance; полный допуск 4.2 остаётся открытым.
+
 ## Статус компонентной реализации — 2026-10-15
 
 Исторический локальный срез 686 тестов расширен двумя final-validation регрессиями:
-последний компонентный build/test — 688 тестов без failures/skipped, 23:04:21 МСК.
+компонентный checkpoint 688 прошёл без failures/skipped в 23:04:21 МСК.
 После checkpoint 616 добавлены 21 проверка Unicode/safety, 21 projection/reader,
 12 reveal, 16 UI session и две проверки final external isValid. Будущие candidate
 gate/wiring-файлы не включены в этот результат. Opt-in Unicode требует bound receiver

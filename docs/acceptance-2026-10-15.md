@@ -1146,3 +1146,66 @@ PID-адаптер читает только идентичность проце
 не бессрочная lease и не замена process-exit latch. Все три части получили независимый
 review; рабочий EventTapCore/Converter ещё не подключён, обычного replay permit нет.
 Данный срез предшествует системному bridge D7.2 и не заменяет его приёмку.
+
+После отдельной сверки критериев принят самостоятельный пункт 5.2: 21 projector/reader
+тест, 12 reveal-тестов, живое раскрытие/ручное копирование и зелёный CI688 подтверждают
+eventPayloadOnly, сохранность исходной записи, отсутствие исполнения raw events и
+автоэкспорта. Поддержка законченного IME-текста не заявляется. Текущий итог change —
+**3/14**; остальные пункты не закрываются этой компонентной приёмкой.
+
+## CI 726 и системный probe с Core registry
+
+[CI `955b006`](https://github.com/cramen/LSwitch/actions/runs/38803667663) зелёный:
+build, 726 тестов без failures/skipped и strict SwiftLint — 0 нарушений в 221 файле.
+Лог `.build/checkpoint-955b006-ci.log`. Следующий локальный прогон с пятью тестами
+DEBUG bridge завершился в 23:46:36 МСК: **731 тест, 0 failures, 0 skipped**,
+`.build/input-recovery-registry-bridge-test.log`. Эти тесты проверяют модель callback
+protocol и не являются доказательством системного возврата nil. Результат 731
+не переносится на CI среза 726.
+
+Финальный повторный общий build/test — **731 тест без failures/skipped**,
+`.build/input-recovery-recipient-final-{build,test}.log`; независимый review CLEAN,
+статические ограничения шести Swift-файлов проверены. Новый CI для среза 731 ещё не запущен.
+
+Новый режим использует настоящий RecipientGateState/NativeDispatchRegistry и ledger,
+с проверкой own PID+birth до post и sender PID → reserved marker → shape в callback.
+Обработчик передаёт только метаданные; ledger обновляется на MainActor. Поля текста
+проверяются собственным NSTextView. Production capture, receiver ACK и replay permit
+по этим наблюдениям не включаются.
+
+Первый кандидат SHA
+`ff9d569f42ff8205033d10adafee1dda0e9b9dc3824f72b2ddd5e56f0e085bfb`
+сохранён в `.build/recovery-recipient-summary-first-observation.json` и
+`.build/recovery-recipient-registry-disable-fail-open-first-observation.json`.
+Disable завершился timeout через 4287 мс: исходная гипотеза ожидала обход head обеими
+клавишами, но queued callback заблокировал Down, а только Up прошёл в tail/receiver.
+Это не выполненное исходное ожидание теста; оно не заменяется позднейшим PASS задним числом.
+
+В v2 критерий наблюдения проверяет точное разбиение отправленной пары между blocked
+и доставленными событиями, ordered tail==receiver и изменение текста только при
+фактически полученном Down. SHA executable:
+`a3e9844b79351e414f80726fafb3434772a2ea23fa1b2d8cf0e61f8b03581456`;
+manifest `.build/recovery-recipient-candidate-v2-manifest.json`, результаты
+`.build/recovery-recipient-v2-summary.json`.
+
+| Режим / сценарий v2 | Наблюдение | Время / изменений текста |
+| --- | --- | --- |
+| Registry / baseline | Down/Up прошли, точные текст и каретка | 363 мс / 1 |
+| Registry / late-before-admission | Обе клавиши заблокированы, исходник сохранён | 368 мс / 0 |
+| Registry / late-after-admission | Уже admitted пара исполнилась после close | 343 мс / 1 |
+| Registry / balance-after-close | После actual receiver Down прошёл один paired Up | 378 мс / 1 |
+| Registry / disable-fail-open | Down заблокирован queued callback, receiver получил только Up | 374 мс / 0 |
+| Legacy / baseline | Исторический режим сохранил прежний результат | 366 мс / 1 |
+
+Все шесть опытов имеют observationComplete=true, cleanupCompleted=true и пустой
+stderr. В disable protectionAvailable=false/lost=true; Core registry содержит
+одно prevented-решение, но ledger сохраняет **Prevented=0, Unknown=1, Unresolved=2**.
+Up остаётся submitted в registry. Баланс пары не подтверждён; ноль изменений в
+NSTextView не доказывает безопасность Up для произвольного получателя. Во всех
+отчётах receiverCompleted/replayAuthorized/recoveryGateAccepted остаются false.
+
+После проверки восстановлен единственный обычный LSwitch, PID 93995; исходный
+bundle 513b не заменялся. CUA подтвердил enabled=ON, auto=OFF, sound=ON, login=OFF,
+undo=3 с, learning=2, пустые личные исключения и исключение Terminal/iTerm.
+После ранее завершённого UI-аудита clipboard больше не использовался.
+Change сохраняет **3/14**: 5.2 принят отдельно; gate 4.2, runtime и lifecycle остаются открытыми.

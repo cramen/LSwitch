@@ -1,19 +1,25 @@
 import AppKit
 import CoreGraphics
+import LSwitchCore
 
 /// Ранний dispatcher для уже подписанного LSwitch.app; штатный AppDelegate не нужен.
 @MainActor
 enum RecoveryReceiverProbe {
     static func runIfRequested(arguments: [String]) -> Int32? {
-        let prefix = "--recovery-receiver-probe="
-        guard let argument = arguments.first(where: { $0.hasPrefix(prefix) }) else { return nil }
+        let legacyPrefix = "--recovery-receiver-probe="
+        let registryPrefix = "--recovery-recipient-probe="
+        guard let argument = arguments.first(where: {
+            $0.hasPrefix(legacyPrefix) || $0.hasPrefix(registryPrefix)
+        }) else { return nil }
+        let usesRegistry = argument.hasPrefix(registryPrefix)
+        let prefix = usesRegistry ? registryPrefix : legacyPrefix
         #if DEBUG
         guard Bundle.main.bundleIdentifier == "ru.cramen.lswitch",
               let scenario = RecoveryReceiverProbeScenario(rawValue: String(argument.dropFirst(prefix.count))) else {
             print("{\"status\":\"invalid_identity_or_scenario\",\"recoveryGateAccepted\":false}")
             return 2
         }
-        return RecoveryReceiverProbeController(scenario: scenario).run()
+        return RecoveryReceiverProbeController(scenario: scenario, usesRegistry: usesRegistry).run()
         #else
         print("{\"status\":\"debug_only\",\"recoveryGateAccepted\":false}")
         return 2
@@ -34,6 +40,7 @@ private enum RecoveryReceiverProbeScenario: String {
 private final class RecoveryReceiverProbeController: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let scenario: RecoveryReceiverProbeScenario
     private let gate: RecoveryReceiverProbeGate
+    private let usesRegistry: Bool
     private let title = "LSwitch Recovery Receiver Probe \(UUID().uuidString)"
     private let fixture = "seed "
     private let started = DispatchTime.now().uptimeNanoseconds
@@ -60,11 +67,14 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
     private var cleanupCompleted = false
     private var textChangeCount = 0
     private var gateBeforeCleanup: RecoveryReceiverProbeGate.Snapshot?
+    private var registryBeforeCleanup: RecoveryRecipientProbeSnapshot?
+    private var headDisabledBeforeAdmissionRelease = false
 
-    init(scenario: RecoveryReceiverProbeScenario) {
+    init(scenario: RecoveryReceiverProbeScenario, usesRegistry: Bool) {
         self.scenario = scenario
+        self.usesRegistry = usesRegistry
         let balancing = scenario == .balanceAfterClose || scenario == .lateBeforeAdmission
-        gate = RecoveryReceiverProbeGate(allowsPairedUpAfterClose: balancing)
+        gate = RecoveryReceiverProbeGate(allowsPairedUpAfterClose: balancing, usesRegistry: usesRegistry)
     }
 
     func run() -> Int32 {
@@ -75,7 +85,7 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
             cleanupCompleted = true
             return report()
         }
-        guard gate.start() else {
+        guard gate.start(), gate.activateRegistry() else {
             status = "gate_unavailable"
             cleanupCompleted = gate.stop()
             return report()
@@ -151,11 +161,14 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
     }
 
     private func observeReceiver(_ editor: RecoveryReceiverProbeView, now: UInt64) {
+        _ = gate.drainRegistry()
         let state = gate.snapshot()
         guard state.failure == nil, state.tailEnabled else { return finish("gate_lost") }
         let expectedHead = scenario != .disableFailOpen
         guard state.headEnabled == expectedHead else { return finish("unexpected_head_state") }
-        let expectedText = scenario == .lateBeforeAdmission ? fixture : fixture + "a"
+        let disabledWithoutDown = scenario == .disableFailOpen && usesRegistry && !state.tail.contains("down")
+        let expectedChanges = scenario == .lateBeforeAdmission || disabledWithoutDown ? 0 : 1
+        let expectedText = expectedChanges == 0 ? fixture : fixture + "a"
         let expectedRange = NSRange(location: expectedText.utf16.count, length: 0)
         textMatches = editor.string.utf16.elementsEqual(expectedText.utf16)
         selectionMatches = editor.selectedRange() == expectedRange
@@ -163,7 +176,8 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
             balanceAfterReceiverDown(editor, state: state)
             return
         }
-        guard routingMatches(state, editor: editor), textMatches, selectionMatches else {
+        guard routingMatches(state, editor: editor), textMatches, selectionMatches,
+              editor.textChangeCount == expectedChanges else {
             firstCompleteAt = nil
             return
         }
@@ -190,6 +204,12 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
         case .balanceAfterClose:
             return deliveredPair && closedAfterReceiverDown && state.balancedUpCount == 1
         case .disableFailOpen:
+            if usesRegistry {
+                return headDisabledBeforeAdmissionRelease && state.admitted.isEmpty
+                    && RecoveryRecipientProbeReporting.disabledPartition(
+                        blocked: state.blocked, tail: state.tail, receiver: editor.received
+                    )
+            }
             return state.admitted.isEmpty && state.blocked.isEmpty && state.tail == pair
                 && editor.received == pair
         }
@@ -197,7 +217,8 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
 
     private var observedStatus: String {
         switch scenario {
-        case .disableFailOpen: return "disable_fail_open_observed"
+        case .disableFailOpen:
+            return usesRegistry ? "disable_routing_limitation_observed" : "disable_fail_open_observed"
         case .lateAfterAdmission: return "late_execution_after_generation_close_observed"
         case .balanceAfterClose: return "paired_up_after_generation_close_observed"
         case .baseline, .lateBeforeAdmission: return "own_receiver_observed"
@@ -220,6 +241,7 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
         receiverObserved = editor?.received ?? []
         textChangeCount = editor?.textChangeCount ?? 0
         gateBeforeCleanup = gate.snapshot()
+        registryBeforeCleanup = gate.drainRegistry()
         cleanupCompleted = gate.stop()
         window?.delegate = nil
         window?.close()
@@ -237,7 +259,7 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
 
     private func report() -> Int32 {
         let state = gateBeforeCleanup ?? gate.snapshot()
-        let report: [String: Any] = [
+        var report: [String: Any] = [
             "scenario": scenario.rawValue, "status": status, "observationComplete": observed,
             "ownPIDOnly": true, "ownNSTextViewOnly": true, "posted": posted,
             "admitted": state.admitted, "blocked": state.blocked, "tailObserved": state.tail,
@@ -258,6 +280,15 @@ private final class RecoveryReceiverProbeController: NSObject, NSApplicationDele
             "requestedPermissions": false, "clipboardTouched": false, "payloadLogged": false,
             "externalRendererAcknowledged": false, "recoveryGateAccepted": false, "safetyPassed": false
         ]
+        report["usesCoreRegistry"] = usesRegistry
+        report["prePostIdentityChecks"] = posted.count
+        report["headDisabledBeforeAdmissionRelease"] = headDisabledBeforeAdmissionRelease
+        report["queuedCallbackAfterDisableObserved"] = headDisabledBeforeAdmissionRelease && !state.blocked.isEmpty
+        report["receiverDownWithoutRelease"] = receiverObserved == ["down"]
+        report["pairBalanceConfirmed"] = receiverObserved == ["down", "up"]
+        if let registry = registryBeforeCleanup ?? gate.drainRegistry() {
+            report["registry"] = RecoveryRecipientProbeReporting.fields(registry)
+        }
         if let data = try? JSONSerialization.data(withJSONObject: report, options: [.sortedKeys]),
            let encoded = String(data: data, encoding: .utf8) {
             print(encoded)
@@ -271,7 +302,7 @@ private extension RecoveryReceiverProbeController {
     func submitInitialInput() {
         guard let source = CGEventSource(stateID: .privateState) else { return finish("event_source_failed") }
         eventSource = source
-        if scenario == .disableFailOpen {
+        if scenario == .disableFailOpen, !usesRegistry {
             gate.closeGeneration()
             guard gate.disableHead() else { return finish("head_disable_failed") }
         }
@@ -281,6 +312,11 @@ private extension RecoveryReceiverProbeController {
         if scenario == .lateBeforeAdmission {
             gate.closeGeneration()
             closedAfterSubmission = true
+        }
+        if scenario == .disableFailOpen, usesRegistry {
+            gate.closeGeneration()
+            guard gate.disableHead() else { return finish("head_disable_failed") }
+            headDisabledBeforeAdmissionRelease = true
         }
         gate.releaseAdmissions()
         if scenario == .lateAfterAdmission { closeAfterTailAdmission() }
@@ -292,8 +328,8 @@ private extension RecoveryReceiverProbeController {
             return false
         }
         let state = gate.snapshot()
-        guard state.failure == nil, state.tailEnabled,
-              state.headEnabled == (scenario != .disableFailOpen) else {
+        let expectedHead = scenario != .disableFailOpen || usesRegistry
+        guard state.failure == nil, state.tailEnabled, state.headEnabled == expectedHead else {
             finish("post_gate_guard")
             return false
         }
@@ -303,14 +339,31 @@ private extension RecoveryReceiverProbeController {
             return false
         }
         event.flags = []
-        event.setIntegerValueField(.eventSourceUserData, value: gate.markerBase + (isDown ? 0 : 1))
+        guard let marker = gate.marker(isDown: isDown) else {
+            finish("marker_unavailable")
+            return false
+        }
+        event.setIntegerValueField(.eventSourceUserData, value: marker)
         if isDown {
             var character: UniChar = 97
             event.keyboardSetUnicodeString(stringLength: 1, unicodeString: &character)
         }
+        guard verifyPacket(event, isDown: isDown, marker: marker),
+              gate.registerBeforePost(isDown: isDown) else {
+            finish("post_identity_or_submission_failed")
+            return false
+        }
         posted.append(isDown ? "down" : "up")
         event.postToPid(getpid())
+        gate.recordPostReturned(isDown: isDown)
         return true
+    }
+
+    func verifyPacket(_ event: CGEvent, isDown: Bool, marker: Int64) -> Bool {
+        event.getIntegerValueField(.eventSourceUserData) == marker
+            && event.getIntegerValueField(.eventSourceUnixProcessID) == Int64(getpid())
+            && event.type == (isDown ? .keyDown : .keyUp)
+            && event.getIntegerValueField(.keyboardEventKeycode) == 0 && event.flags.isEmpty
     }
 
     func closeAfterTailAdmission() {
