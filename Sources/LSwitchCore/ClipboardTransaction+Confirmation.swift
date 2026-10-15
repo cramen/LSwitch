@@ -34,23 +34,27 @@ extension ClipboardTransaction {
 
     func acknowledge(_ state: ClipboardEnvironment.TextState, expectation: PasteExpectation) async -> Bool {
         guard valid else { return false }
-        if expectation.isConfirmed(state) { return true }
-        guard state.text == expectation.expectedText, state.selection == expectation.insertedRange else { return false }
+        if expectation.isConfirmed(state), safety.textMatches(state.text, expectation.expectedText) {
+            noteCleanupState(state)
+            return safety.requireCompletion(.textConfirmed)
+        }
+        guard safety.textMatches(state.text, expectation.expectedText),
+              state.selection == expectation.insertedRange else { return false }
         if await collapseKnownSelection(state) { return valid }
         guard verifiedPlan == nil, await collapseSelection(), valid,
               let collapsed = context?.readState() else { return false }
-        return expectation.isConfirmed(collapsed)
+        return expectation.isConfirmed(collapsed) && safety.textMatches(collapsed.text, expectation.expectedText)
     }
 
     func collapseKnownSelection(_ state: ClipboardEnvironment.TextState) async -> Bool {
         guard cleanupAllowed, let current = context?.readState(),
-              current.text == state.text, current.selection == state.selection else { return false }
+              safety.textMatches(current.text, state.text), current.selection == state.selection else { return false }
         let caret = NSRange(location: NSMaxRange(state.selection), length: 0)
         guard cleanupAllowed else { return false }
         if usesKeyboardSelection {
             return await collapseKeyboardSelection(state, caret: caret, allowed: [state.selection, caret])
         }
-        _ = context?.setSelection(caret)
+        _ = setSelection(caret, cleanup: true)
         return await settleSelection(
             text: state.text, selection: caret, allowed: [state.selection, caret], cleanup: true
         )
@@ -60,9 +64,9 @@ extension ClipboardTransaction {
         guard cleanupAllowed else { return }
         if let expectation {
             guard let state = context?.readState(), state.selection.length > 0,
-                  expectation.recognizesSelection(state) else { return }
+                  recognizesCleanupSelection(state, expectation: expectation) else { return }
             if let verifiedPlan {
-                if state.text == verifiedPlan.text {
+                if safety.textMatches(state.text, verifiedPlan.text) {
                     await restoreVerifiedSelection(verifiedPlan)
                 } else {
                     _ = await collapseKnownSelection(state)
@@ -76,8 +80,29 @@ extension ClipboardTransaction {
         _ = await collapseSelection()
     }
 
+    private func recognizesCleanupSelection(
+        _ state: ClipboardEnvironment.TextState, expectation: PasteExpectation
+    ) -> Bool {
+        let original = safety.textMatches(state.text, expectation.before.text)
+            && state.selection == expectation.before.selection
+        let converted = safety.textMatches(state.text, expectation.expectedText)
+            && state.selection == expectation.insertedRange
+        return original || converted
+    }
+
     func cleanupLegacySelection() async -> Bool {
         guard cleanupAllowed else { return false }
+        if request.safetyLedger != nil {
+            if let verifiedPlan {
+                await restoreVerifiedSelection(verifiedPlan)
+                return cleanupState != nil
+            }
+            guard let state = context?.readState(), let legacyState,
+                  safety.textMatches(state.text, legacyState.text), state.selection == legacyState.selection else {
+                return false
+            }
+            return await collapseKnownSelection(state)
+        }
         if let state = context?.readState(), let legacyState,
            state.text == legacyState.text, state.selection == legacyState.selection, state.selection.length > 0 {
             return await collapseSelection()

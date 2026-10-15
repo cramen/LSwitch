@@ -9,11 +9,13 @@ final class ClipboardTransaction {
     let configuration: ClipboardConverter.Configuration
     let environment: ClipboardEnvironment
     let transform: (@Sendable (String) -> String)?
+    let safety: ClipboardMutationSafety
     let logger = Logger(subsystem: "LSwitch", category: "Clipboard")
     var context: ClipboardEnvironment.Context?
     var snapshot: PasteboardSnapshot?
     var initialCount = 0
     var ownedCount: Int?
+    var lastWriteOwnedCount: Int?
     var createdSelection = false
     var pasted = false
     var existingSelection: String?
@@ -25,6 +27,7 @@ final class ClipboardTransaction {
     var legacyState: ClipboardEnvironment.TextState?
     var automaticContext: AutomaticTextContext?
     var documentTargetCheck: ConversionReceipt.TargetCheck?
+    var cleanupState: ClipboardEnvironment.TextState?
 
     typealias Parts = (word: String, tail: String)
 
@@ -61,11 +64,17 @@ final class ClipboardTransaction {
         self.configuration = configuration
         self.environment = environment
         self.transform = transform
+        self.safety = ClipboardMutationSafety(request: request)
     }
 
     func run() async -> ConversionResult {
         environment.bindDiagnostics(request.diagnostics)
         defer { environment.bindDiagnostics(nil) }
+        let result = await runOperation()
+        return finalizeSafety(result)
+    }
+
+    private func runOperation() async -> ConversionResult {
         guard request.isValid() else {
             reject(.requestInvalid)
             return .blocked
@@ -76,6 +85,7 @@ final class ClipboardTransaction {
         }
         self.context = context
         guard contextIsValid() else { return .blocked }
+        guard safety.bind(context: context, contract: environment.receiverContract) else { return .blocked }
         if !request.isAutomatic {
             documentTargetCheck = ConversionDocumentTarget.check(identity: context.documentIdentity(),
                                                                 read: context.documentIdentity)
@@ -150,6 +160,7 @@ final class ClipboardTransaction {
             let selected = await send(command)
             rememberLegacySelection()
             guard selected else { return await finish(valid ? .unavailable : .blocked) }
+            guard safety.requireCompletion(.selectionSettled) else { return await finish(.failed) }
         }
         // Cmd+C идёт сразу за выделением в той же очереди. Лишняя пауза здесь
         // оставила бы дополнительное окно для пользовательского ввода.
@@ -217,6 +228,7 @@ extension ClipboardTransaction {
             guard valid else { return .blocked }
             let afterCopy = environment.changeCount()
             guard afterCopy != beforeCopy else {
+                guard safety.requireCompletion(.commandReturned) else { return .failed }
                 // Повторяем только Cmd+C: новое ⇧← расширило бы выделение.
                 logger.notice("Копирование не завершено, попытка \(attempt)")
                 delay *= 2
@@ -228,7 +240,10 @@ extension ClipboardTransaction {
                 logger.notice("Выделенный фрагмент не совпал с запросом")
                 return .unavailable
             }
+            guard valid, environment.changeCount() == afterCopy else { return .blocked }
             ownedCount = afterCopy
+            // Владение pasteboard не является подтверждением завершения команды редактором.
+            guard safety.requireCompletion(.commandReturned) else { return .failed }
             return await paste(parts: parts)
         }
         return .unavailable
@@ -243,12 +258,12 @@ extension ClipboardTransaction {
         guard let plan = preparePaste(copied: parts) else { return .unavailable }
         guard valid, environment.changeCount() == ownedCount else { return .blocked }
         let written = writeClipboard(plan.inserted)
-        ownedCount = written.changeCount
+        ownedCount = lastWriteOwnedCount ?? ownedCount
         guard written.succeeded else { return .unavailable }
         guard environment.changeCount() == ownedCount else { return .blocked }
         // setString завершает запись синхронно; получатель читает уже готовый clipboard.
         guard valid else { return .blocked }
-        pasted = true
+        if request.safetyLedger == nil { pasted = true }
         guard await send(.paste) else {
             await cleanupPaste(expectation: plan.expectation, original: plan.original, inserted: plan.inserted)
             return .failed
@@ -329,7 +344,7 @@ extension ClipboardTransaction {
 
     func send(_ command: ClipboardCommand) async -> Bool {
         guard valid else { return false }
-        let sent = await environment.send(command, {
+        let sent = await dispatch(command, isValid: {
             self.valid && (command != .paste || self.environment.changeCount() == self.ownedCount)
         })
         return sent && valid
@@ -337,7 +352,7 @@ extension ClipboardTransaction {
 
     func collapseSelection() async -> Bool {
         guard cleanupAllowed else { return false }
-        guard await environment.send(.collapseSelection, { self.cleanupAllowed }) else { return false }
+        guard await dispatch(.collapseSelection, isValid: { self.cleanupAllowed }) else { return false }
         if cleanupAllowed && context?.selectedText()?.isEmpty == true { return true }
         await environment.sleep(configuration.writeDelay)
         guard cleanupAllowed else { return false }
@@ -346,7 +361,8 @@ extension ClipboardTransaction {
 
     func finish(_ result: ConversionResult) async -> ConversionResult {
         var finalResult = result
-        if createdSelection && !pasted && cleanupAllowed, !(await cleanupLegacySelection()) {
+        let needsCleanup = request.safetyLedger == nil || request.safetyLedger?.hasEditorMutation == true
+        if createdSelection && !pasted && needsCleanup && cleanupAllowed, !(await cleanupLegacySelection()) {
             finalResult = .failed
         }
         if let snapshot, let ownedCount, environment.changeCount() == ownedCount {

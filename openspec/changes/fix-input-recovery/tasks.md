@@ -24,15 +24,40 @@ runtime пока не создаёт ledger и EventTapCore ещё не испо
 остаётся unavailable; обычный runtime работает без нового ledger. Системный допуск
 и подключение к решению об очереди не приняты, поэтому 2.1 не закрывается.
 
+Частично выполнено 2.2: opt-in clipboard-адаптер и per-post hooks сохраняют отдельные
+mutation/cleanup и clipboard ownership; 21 новая regression-проверка. Review исправил
+canonical-equivalent foreign prefix перед cleanup и потерю исходного clipboard после
+unresolved Copy. Общий локальный build/test: 616/616, 0 failures; production receiver
+contract отсутствует, runtime не создаёт ledger. Реальный P1 в обычном режиме ещё
+не считается исправленным, 2.2 остаётся открытой до интеграции.
+
 ## 3. Владение событиями и жизненный цикл
 
 - [ ] 3.1 Добавить atomic detach в InputEventBuffer/EventTapCore и убрать безусловный replay из defer/endInputHold/deinit. Проверка: реальные удержанные копии в компонентных тестах сохраняют порядок и generation при detach, исходный владелец не может использовать их повторно; остановка/пересоздание tap, modifier debt и частичные Down/Up не вызывают скрытый post или drop.
 - [ ] 3.2 Ввести RAM RecoveryCoordinator и связать его с OFF, Secure Input/TCC/tap-loss и graceful quit через заменяемые lifecycle-адаптеры. Проверка: OFF прекращает перехват, очередь и состояние опасной цели остаются доступными; отмена quit сохраняет запись, подтверждённое удаление выполняется один раз, позднее восстановление прав не запускает replay; crash не моделируется как durable storage.
 
+Частично выполнены 3.2/4.1: чистые RAM coordinator/admission и 28 тестов связывают
+operation, PID с birth time и hold-token; квоты проверяются до append, seal/claim
+однократны. Gate loss и отрицательные lifecycle edges необратимо отменяют старый
+допуск даже при ABA; hide/OFF не удаляют payload, delete/quit/cancel имеют явные
+intent tokens. Реальный capture/gate/UI ещё не подключён, поэтому задачи открыты.
+
 ## 4. Допуск и системный приёмник
 
 - [ ] 4.1 Реализовать RecoveryAdmission с резервом одной pending-записи, 256 событий и 64 KiB логического UTF-16 payload, связанный с process instance, generation и готовностью gate. Проверка: unavailable/lost gate, уже pending recovery, превышение лимита и невозможность ограниченного handover отказывают до selection/Copy/Paste; приближение к порогу не обрезает уже удержанную очередь и не продлевает mutation lease 400 мс.
 - [ ] 4.2 Подготовить и проверить системный кандидат per-PID quarantine/admission с отдельным протоколом допуска. Проверка в собственном приёмнике: фактическая доставка и изоляция, порядок injected/original, focus changes, tap-loss/disable, Secure Input, late submitted selection/text packets, Down/Up, modifiers, shortcuts и mouse; marker/order не выдаются за renderer ACK. До полного подтверждения кандидат остаётся unavailable для собственной мутации; ограниченный уже выполненный keyUp probe не закрывает задачу.
+
+Частично выполнено 4.2: изолированная DEBUG-сборка на базе `777c2cb` прошла baseline,
+late-before-admission и намеренный disable fail-open на собственном NSTextView,
+с реальным text/caret результатом и отдельным worker run loop gate. SHA бинарника
+`1ce16fa257981e16d38d40c22258c9187e9ee2d0d7517a2dfe7f748912869375`.
+Нет подтверждения внешнего renderer, полной клавиатурной матрицы и изоляции двух
+процессов; gate по-прежнему не допущен к production.
+Следующая изолированная сборка SHA
+`83dae73c1aabb135e555af6fcbcd9778a9527f896589cd024ccd0a89291d3cfe`
+дополнительно подтвердила позднее исполнение уже admitted пары после close и
+доставку ровно одного paired Up после закрытия при ранее admitted Down. Отрицательный
+контроль без Down debt по-прежнему блокирует Up. Это own-PID результаты, не полный допуск.
 
 ## 5. Локальный интерфейс восстановления
 

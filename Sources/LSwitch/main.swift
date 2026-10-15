@@ -363,30 +363,7 @@ extension AppDelegate {
     }
 }
 
-if MainActor.assumeIsolated({ PasteboardCaptureHelper.runIfRequested(arguments: CommandLine.arguments) }) {
-    exit(0)
-}
-
-MainActor.assumeIsolated {
-    if let executable = Bundle.main.executableURL {
-        ClipboardCaptureSupport.registerHelper(executableURL: executable)
-    }
-}
-
-if CommandLine.arguments.contains("--verify-resources") {
-    let dictionaries = DictionaryStore()
-    let available = dictionaries.contains("привет", language: .russian)
-        && dictionaries.contains("hello", language: .english)
-    print("resources: \(DictionaryStore.resourceBundle.bundleURL.path)")
-    print("dictionaries: \(available ? "ok" : "missing")")
-    exit(available ? 0 : 1)
-}
-
-if CommandLine.arguments.contains("--probe") {
-    Probe.run()
-}
-
-if let status = MainActor.assumeIsolated({ AcceptanceProbe.runIfRequested(arguments: CommandLine.arguments) }) {
+if let status = MainActor.assumeIsolated({ StartupCommands.runIfRequested(arguments: CommandLine.arguments) }) {
     exit(status)
 }
 

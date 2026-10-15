@@ -18,7 +18,7 @@ extension ClipboardTransaction {
     }
 
     func applyVerifiedSelection(_ plan: AXReplacementPlan) async -> Bool {
-        guard usesKeyboardSelection else { return context?.setSelection(plan.range) == true }
+        guard usesKeyboardSelection else { return setSelection(plan.range, cleanup: false) }
         guard let keyboardSelectionPlan else { return false }
         request.diagnostics?.mark(.selectionKeyboardRequested)
         return await send(.selectCharacters(keyboardSelectionPlan.characterCount))
@@ -29,7 +29,7 @@ extension ClipboardTransaction {
               recognizedKeyboardState(plan) != nil else { return false }
         // В конце текста Right идемпотентен даже при ignored batch. Обязательно
         // публикуем его после стрелок, не считая cached empty readback их ACK.
-        guard await environment.send(.collapseSelection, { self.recognizedKeyboardState(plan) != nil }) else {
+        guard await dispatch(.collapseSelection, isValid: { self.recognizedKeyboardState(plan) != nil }) else {
             return false
         }
         return await settleSelection(
@@ -41,15 +41,16 @@ extension ClipboardTransaction {
         _ state: ClipboardEnvironment.TextState, caret: NSRange, allowed: [NSRange]
     ) async -> Bool {
         guard cleanupAllowed, state.selection.length > 0,
-              let current = context?.readState(), current.text == state.text,
+              let current = context?.readState(), safety.textMatches(current.text, state.text),
               current.selection == state.selection, cleanupAllowed else { return false }
-        guard await environment.send(.collapseSelection, { self.cleanupAllowed }) else { return false }
+        guard await dispatch(.collapseSelection, isValid: { self.cleanupAllowed }) else { return false }
         return await settleSelection(text: state.text, selection: caret, allowed: allowed, cleanup: true)
     }
 
     private func recognizedKeyboardState(_ plan: AXReplacementPlan) -> ClipboardEnvironment.TextState? {
         guard cleanupAllowed, let keyboardSelectionPlan, let current = context?.readState(),
-              current.text == plan.text, keyboardSelectionPlan.ownedRanges.contains(current.selection),
+              safety.textMatches(current.text, plan.text),
+              keyboardSelectionPlan.ownedRanges.contains(current.selection),
               cleanupAllowed else { return nil }
         return current
     }

@@ -11,7 +11,7 @@ CGEvent-драйвером только в отдельных тестовых �
 
 | Набор | Подтверждение | Граница доказательства |
 | --- | --- | --- |
-| Последний зелёный CI | `2331661`; [CI](https://github.com/cramen/LSwitch/actions/runs/38756602714) | Build, 513 тестов без ошибок/пропусков, SwiftLint strict 0 нарушений в 148 файлах, 18:02:18 МСК; модельный P1 ниже остаётся открытым |
+| Последний зелёный CI | `777c2cb`; [CI](https://github.com/cramen/LSwitch/actions/runs/38782389390) | Build, 567 тестов без ошибок, SwiftLint strict 0 нарушений в 162 файлах, 21:04:22 МСК; новый recovery пока не подключён к runtime, P1 остаётся открытым |
 | Checkpoint 513b до style-fix | `26eb06b`; [CI](https://github.com/cramen/LSwitch/actions/runs/38754968717) | Сборка и 513 тестов прошли; одно нарушение nesting у typealias. Исправлено без изменения поведения, повторный CI `2331661` прошёл |
 | Предыдущая опубликованная серия | `3a28be9`; [CI](https://github.com/cramen/LSwitch/actions/runs/38639631742) | Исторический результат на 255 тестах |
 | Сборка Chrome/звука/settlement | `make build`, `make test`: 322 теста, 0 ошибок, 0 пропусков; 02:39:26 | `.build/acceptance-chrome-transport-{build,tests,app}.log`; именно этот бинарник запущен для длительного наблюдения |
@@ -916,10 +916,10 @@ TCC и защита текста не проверялись. Одного уд�
 чтобы считать старые отправки отменёнными. Это ограничение включено в lifecycle-план.
 
 Приёмка ещё требует реального получателя и отказов, включая поздний пакет, OFF,
-потерю tap/прав, focus, modifiers и mouse. Предложенный аварийный режим, в котором
-уже удержанные события сохраняются, а новые нажатия в проблемном приложении видимо
-отклоняются, ожидает отдельного выбора пользователя. Это не объявляется сохранением
-каждого будущего нажатия. Рабочий системный путь до принятия режима не включается.
+потерю tap/прав, focus, modifiers и mouse. Аварийный режим, в котором уже удержанные
+события сохраняются, а новые нажатия в проблемном приложении видимо отклоняются,
+принят по поручению пользователя ниже. Это не объявляется сохранением каждого
+будущего нажатия. Рабочий системный путь до системного допуска не включается.
 
 Финальный локальный checkpoint 20:46:46 МСК: **567 тестов, 0 ошибок**, сборка прошла,
 OpenSpec strict 6/6. После первой проверки добавлены идентичность buffer в hold-token,
@@ -947,3 +947,80 @@ CI `07440eb` выполнил сборку и тесты, но strict SwiftLint 
 complexity 11 в AX execute и лишний memberwise initializer submission token.
 Устранение вынесением финального cleanup в отдельный метод и синтезируемым initializer
 не меняет выбранный runtime; следующий CI должен подтвердить исправление.
+
+Повторный [CI `777c2cb`](https://github.com/cramen/LSwitch/actions/runs/38782389390)
+зелёный: build, 567 тестов и strict SwiftLint без нарушений в 162 файлах.
+Полный лог `.build/checkpoint-777c2cb-ci.log`.
+
+## Own-PID приёмник с настоящим NSTextView
+
+Изолированный snapshot содержит `777c2cb467d301c4886e7c8121a402465fe892e6`, три новых
+`RecoveryReceiverProbe*.swift` и ранний dispatcher в main. Незавершённые clipboard
+и RAM-coordinator изменения в него не входят. Источник и SHA-файлы описаны в
+`.build/recovery-receiver-candidate-manifest.json`; каталог
+`.build/recovery-receiver-candidate-777c2cb`. Сборка, 567 тестов и `make app` прошли;
+новый bundle подписан прежним «LSwitch Dev»/`ru.cramen.lswitch`, SHA executable
+`1ce16fa257981e16d38d40c22258c9187e9ee2d0d7517a2dfe7f748912869375`.
+Приложение использует только прежние preflight-разрешения, без запросов TCC.
+
+Gate работает на отдельном CFRunLoop. Перед каждым собственным post проверяются
+активность приложения, точное собственное окно, title и first responder. Down/Up
+идут только в getpid(); ввод обрабатывается обычным NSTextView, без имитации через
+прямой insertText. В журнал попадают лишь стадии и результаты сравнений.
+
+| Сценарий | Системный маршрут | Фактический редактор | Время/очистка |
+| --- | --- | --- | --- |
+| baseline | head/tail/receiver получили Down, Up | Текст и UTF-16 каретка совпали, 1 изменение текста | 369 мс, cleanup=true |
+| late-before-admission | Пара отправлена до закрытия поколения; head заблокировал обе, tail/receiver пусты | Исходник и каретка сохранены, 0 изменений текста | 383 мс, cleanup=true |
+| disable-fail-open | При выключенном head обе клавиши прошли tail/receiver | Текст изменился, 1 изменение | 383 мс, cleanup=true; это ограничение, не safety PASS |
+
+Логи `.build/recovery-receiver-{baseline,late,disabled}.{json,stderr}`; stderr пуст.
+Во всех отчётах `recoveryGateAccepted=false`, `safetyPassed=false`: эти три сценария
+не проверяют уже admitted, но задержанный receiver packet, modifiers, физические
+частичные пары, фокус, mouse, TCC и изоляцию двух PID. Stage0/change 4.2 не закрываются.
+
+После опытов восстановлена исходная 513b, PID 85132, без test-engine и без замены
+исходного `.build/LSwitch.app`. CUA подтвердил enabled=ON, auto=OFF, sound=ON,
+login=OFF, undo=3 с, learning=2 и пустые личные исключения. Punto и Caramba не запущены.
+
+Вторая изолированная сборка основана на том же `777c2cb` и расширенном probe;
+manifest `.build/recovery-receiver-candidate-v2-manifest.json`, executable SHA
+`83dae73c1aabb135e555af6fcbcd9778a9527f896589cd024ccd0a89291d3cfe`.
+Итог `.build/recovery-receiver-v2-summary.json` сохраняет пять отдельных отчётов:
+
+| Сценарий v2 | Наблюдение | Время |
+| --- | --- | --- |
+| baseline | Down/Up прошли, 1 изменение, точные текст/каретка | 390 мс |
+| late-before-admission | Обе клавиши заблокированы; без Down debt Up не допускается | 356 мс |
+| late-after-admission | Tail получил пару; до close receiver пуст и fixture цела; после close редактор исполнил пару | 387 мс |
+| balance-after-close | После фактического receiver Down поколение закрыто; допущен ровно один paired Up | 371 мс |
+| disable-fail-open | При выключенном head пара снова исполнилась | 376 мс |
+
+Во всех случаях cleanup завершён. В late-after main не обрабатывал AppKit во время
+ожидания tail (0,178 мс из бюджета 100 мс); получено прямое наблюдение, что закрытие
+поколения **не отменяет уже допущенное событие**. Это ограничение, не safety PASS.
+Балансирующее исключение ограничено одной известной собственной парой; произвольные
+модификаторы/shortcuts и физическая клавиатура этим не приняты. Gate остаётся unavailable.
+Обычная исходная `.app` восстановлена как PID 86345; CUA повторно подтвердил прежние
+настройки, Punto/Caramba не запущены. Новые probes не меняли clipboard.
+
+## Компонентный checkpoint: clipboard и RAM recovery
+
+Общий локальный build/test прошёл: **616 тестов, 0 ошибок**, 21:44:05 МСК.
+Добавлен 21 clipboard-тест и 28 тестов admission/coordinator. Логи:
+`.build/input-recovery-clipboard-{build,test}.log` и повторный
+`.build/input-recovery-bootstrap-{build,test}.log`. Ранние CLI-команды вынесены в
+StartupCommands, чтобы main сохранял лимит строгого lint; проверены рабочие словари
+через `--verify-resources` и отказ bare CLI probe без app identity (ожидаемый exit 2).
+
+Независимый review исправил два clipboard-дефекта: canonical-equivalent чужой UTF-16
+больше не допускает cleanup; unresolved Copy принимает matching changeCount отдельно
+от input completion и восстанавливает исходный clipboard без retry/Paste. В RAM-модели
+потеря gate и отрицательная lifecycle edge больше не оживляют старый admission после
+возврата условий; Cancel удаления инвалидирует ticket. Повторный review CLEAN.
+
+Эти компоненты пока opt-in: production receiver contract/gate не приняты, runtime
+не создаёт ledger и не направляет очередь в RAM coordinator. Поэтому модельный P1
+в работающей 513b остаётся открытым. Задачи отмечены частично выполненными, без
+архивирования. Следующий этап — явное раскрытие сохранённых событий и системная
+интеграция; принятие own-PID probes не переносится на сторонние редакторы.

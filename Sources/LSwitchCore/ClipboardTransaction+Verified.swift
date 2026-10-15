@@ -45,7 +45,18 @@ extension ClipboardTransaction {
 
     func writeClipboard(_ text: String) -> (succeeded: Bool, changeCount: Int) {
         request.diagnostics?.mark(.clipboardWriteStarted)
-        let result = environment.write(text)
+        lastWriteOwnedCount = nil
+        let result: (succeeded: Bool, changeCount: Int)
+        if request.safetyLedger != nil {
+            guard let written = environment.writeTracked?(text, {
+                self.valid && self.safety.permitsOrdinary
+                    && self.environment.changeCount() == (self.ownedCount ?? self.initialCount)
+            }) else { return (false, ownedCount ?? initialCount) }
+            result = written
+        } else {
+            result = environment.write(text)
+        }
+        lastWriteOwnedCount = result.changeCount
         request.diagnostics?.mark(.clipboardWritten)
         return result
     }
@@ -61,18 +72,14 @@ extension ClipboardTransaction {
         verifiedPlan = plan
         guard await captureClipboard() else { return .blocked }
         let written = writeClipboard(plan.replacement)
-        ownedCount = written.changeCount
+        ownedCount = lastWriteOwnedCount ?? ownedCount
         guard written.succeeded else {
             reject(.clipboardWriteFailed)
             return .unavailable
         }
         guard originalStateMatches(plan) else { return .blocked }
         request.diagnostics?.mark(.pasteRequested)
-        let outcome = await environment.commitPaste(
-            { await self.selectVerified(plan) },
-            { self.selectedStateMatches(plan) },
-            { self.valid && self.environment.changeCount() == self.ownedCount }
-        )
+        let outcome = await commitVerifiedPaste(plan)
         return await completeVerified(outcome, plan: plan)
     }
 
@@ -80,7 +87,7 @@ extension ClipboardTransaction {
         guard valid else { return false }
         guard environment.changeCount() == ownedCount else { return reject(.clipboardChanged) }
         guard let current = context?.readState() else { return reject(.snapshotUnavailable) }
-        guard current.text == plan.text else { return reject(.textChanged) }
+        guard safety.textMatches(current.text, plan.text) else { return reject(.textChanged) }
         guard current.selection == plan.selection else { return reject(.selectionChanged) }
         guard valid else { return false }
         return environment.changeCount() == ownedCount || reject(.clipboardChanged)
@@ -103,7 +110,7 @@ extension ClipboardTransaction {
         createdSelection = true
         let applied = await applyVerifiedSelection(plan)
         if applied { request.diagnostics?.mark(.selectionApplied) }
-        if cleanupAllowed, let observed = context?.readState(), observed.text == plan.text,
+        if cleanupAllowed, let observed = context?.readState(), safety.textMatches(observed.text, plan.text),
            observed.selection.location == plan.range.location,
            NSMaxRange(observed.selection) <= NSMaxRange(plan.range) {
             observedSelection = observed.selection
@@ -114,7 +121,8 @@ extension ClipboardTransaction {
         )
         if settled { request.diagnostics?.mark(.selectionSettled) }
         logger.notice("phase=select settled=\(settled, privacy: .public)")
-        return settled || reject(.selectionChanged)
+        guard settled else { return reject(.selectionChanged) }
+        return safety.requireCompletion(.selectionSettled)
     }
 
     func selectedStateMatches(_ plan: AXReplacementPlan) -> Bool {
@@ -132,7 +140,7 @@ extension ClipboardTransaction {
             reject(.snapshotUnavailable)
             return false
         }
-        let textMatches = selected.text == plan.text
+        let textMatches = safety.textMatches(selected.text, plan.text)
         let rangeMatches = selected.selection == plan.range
         let contextValid = valid
         let clipboardMatches = environment.changeCount() == ownedCount
@@ -147,18 +155,19 @@ extension ClipboardTransaction {
 
     func restoreVerifiedSelection(_ plan: AXReplacementPlan) async {
         guard createdSelection, !plan.wasSelection else { return }
+        if let ledger = request.safetyLedger, !ledger.hasEditorMutation { return }
         if keyboardSelectionPlan != nil {
             let settled = await restoreKeyboardSelection(plan)
             logger.notice("phase=selection-cleanup native=true settled=\(settled, privacy: .public)")
             return
         }
         guard cleanupAllowed,
-              let current = context?.readState(), current.text == plan.text,
+              let current = context?.readState(), safety.textMatches(current.text, plan.text),
               ownedRanges(plan).contains(current.selection),
               cleanupAllowed else { return }
         // Всегда отменяем собственную попытку: ранний readback исходной каретки
         // не доказывает, что отложенный setter уже завершился.
-        _ = context?.setSelection(plan.selection)
+        _ = setSelection(plan.selection, cleanup: true)
         let settled = await settleSelection(
             text: plan.text, selection: plan.selection, allowed: ownedRanges(plan), cleanup: true
         )
@@ -171,13 +180,17 @@ extension ClipboardTransaction {
     }
 
     func settleSelection(text: String, selection: NSRange, allowed: [NSRange], cleanup: Bool) async -> Bool {
-        await SelectionSettlement.wait(
+        let settled = await SelectionSettlement.wait(
             expected: (text, selection), allowedSelections: allowed,
             isValid: {
                 if cleanup { return self.cleanupAllowed }
                 return self.valid && self.environment.changeCount() == self.ownedCount
             },
-            read: { self.context?.readState() },
+            read: {
+                guard let state = self.context?.readState(),
+                      self.safety.textMatches(state.text, text) else { return nil }
+                return state
+            },
             pause: {
                 if let pause = self.environment.settlementPause {
                     await pause()
@@ -186,12 +199,14 @@ extension ClipboardTransaction {
                 }
             }
         )
+        if settled, cleanup { noteCleanupState((text, selection)) }
+        return settled
     }
 
     func cleanupVerifiedFailure(_ plan: AXReplacementPlan) async {
         guard cleanupAllowed, let current = context?.readState() else { return }
         let inserted = NSRange(location: plan.range.location, length: plan.replacement.utf16.count)
-        if current.text == plan.resultingText && current.selection == inserted {
+        if safety.textMatches(current.text, plan.resultingText) && current.selection == inserted {
             _ = await collapseKnownSelection(current)
         } else {
             await restoreVerifiedSelection(plan)
@@ -206,11 +221,11 @@ extension ClipboardTransaction {
             return .unavailable
         case .failed:
             guard !mutationDenied else { return .blocked }
-            pasted = true
+            if request.safetyLedger == nil { pasted = true }
             await cleanupVerifiedFailure(plan)
             return .failed
         case .performed:
-            pasted = true
+            if request.safetyLedger == nil { pasted = true }
         }
         let expectation = PasteExpectation(
             before: (plan.text, plan.range), expectedText: plan.resultingText,

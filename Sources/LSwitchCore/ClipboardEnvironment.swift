@@ -9,10 +9,12 @@ struct ClipboardEnvironment {
     enum SelectionMethod { case accessibility, keyboard }
 
     struct Context {
+        let identity = UUID()
         var isValid: () -> Bool
         var selectedText: () -> String?
         var readState: () -> TextState? = { nil }
         var setSelection: (NSRange) -> Bool = { _ in false }
+        var prepareSelection: (NSRange) -> AXPreparedWrite? = { _ in nil }
         var safetyFailure: (() -> ConversionDiagnostics.Rejection?)?
         var automaticContext: () -> AutomaticTextContext = { .prose }
         var documentIdentity: @MainActor @Sendable () -> String? = { nil }
@@ -34,6 +36,15 @@ struct ClipboardEnvironment {
     var settlementPause: (() async -> Void)?
     var waitForPendingInput: () async -> Void = {}
     var bindDiagnostics: (ConversionDiagnostics?) -> Void = { _ in }
+    var receiverContract: ClipboardReceiverContract?
+    var writeTracked: ((String, @escaping @MainActor () -> Bool) -> (succeeded: Bool, changeCount: Int)?)?
+    var sendTracked: (
+        (ClipboardCommand, @escaping @MainActor () -> Bool, ClipboardDispatchHooks) async -> Bool
+    )?
+    var commitPasteTracked: (
+        (@escaping @MainActor () async -> Bool, @escaping @MainActor () -> Bool,
+         @escaping @MainActor () -> Bool, ClipboardDispatchHooks) async -> MenuCommand.Outcome
+    )?
 
     static func live(
         pasteboard: NSPasteboard, keyboardOnly: Bool = false,
@@ -66,7 +77,16 @@ struct ClipboardEnvironment {
             },
             settlementPause: { await SelectionSettlement.pause() },
             waitForPendingInput: { await Self.drainMainQueue() },
-            bindDiagnostics: { binding.diagnostics = $0 }
+            bindDiagnostics: { binding.diagnostics = $0 },
+            writeTracked: { text, canWrite in
+                guard canWrite() else { return nil }
+                let count = pasteboard.clearContents()
+                return (pasteboard.setString(text, forType: .string), count)
+            },
+            sendTracked: { await transport.send($0, isValid: $1, hooks: $2) },
+            commitPasteTracked: { select, check, valid, hooks in
+                await transport.commitPaste(select: select, check: check, isValid: valid, hooks: hooks)
+            }
         )
     }
 
@@ -97,6 +117,18 @@ struct ClipboardEnvironment {
                     command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
                     observer: { diagnostics.mark($0) }
                 )
+            },
+            invokeMenuTracked: { MenuCommand.invoke($0, targetPID: $1, isValid: $2, hooks: $3) },
+            commitMenuTracked: { targetPID, select, check, valid, hooks in
+                await MenuCommand.pasteAfterSelection(
+                    targetPID: targetPID, select: select, afterSelectionCheck: check, isValid: valid, hooks: hooks
+                )
+            },
+            sendKeyboardTracked: { command, targetPID, valid, beforeKeyDown, hooks in
+                await KeyboardEmitter.send(
+                    command, targetPID: targetPID, isValid: valid, beforeKeyDown: beforeKeyDown,
+                    observer: { diagnostics.mark($0) }, hooks: hooks
+                )
             }
         )
     }
@@ -126,6 +158,10 @@ struct ClipboardEnvironment {
             let access = SystemAXTextAccess()
             guard target.isCurrent(), access.canSetSelection(in: target.element) else { return false }
             return access.setSelection(range, in: target.element) && target.isCurrent()
+        }, prepareSelection: { range in
+            let access = SystemAXTextAccess()
+            guard target.isCurrent(), access.canSetSelection(in: target.element) else { return nil }
+            return access.prepareSelection(range, in: target.element)
         }, safetyFailure: { target.invalidationReason }, automaticContext: {
             guard target.isCurrent() else { return .unknown }
             let context = SystemAutomaticTextContext.read(in: target.element)

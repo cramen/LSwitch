@@ -29,6 +29,7 @@ public enum ConversionSafetySubmissionKind: Equatable, Sendable {
     case selection
     case text
     case copy
+    case modifier
     case restoreSelection
     case balancingRelease
 

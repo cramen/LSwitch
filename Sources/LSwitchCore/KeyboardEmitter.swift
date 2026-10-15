@@ -30,7 +30,8 @@ enum KeyboardEmitter {
         targetPID: pid_t,
         isValid: @escaping @MainActor () -> Bool,
         beforeKeyDown: @escaping @MainActor () -> Bool = { true },
-        observer: @escaping @MainActor (Phase) -> Void = { _ in }
+        observer: @escaping @MainActor (Phase) -> Void = { _ in },
+        hooks: ClipboardDispatchHooks? = nil
     ) async -> Bool {
         let delivery = Delivery(
             post: { post($0, targetPID: $1) },
@@ -38,7 +39,7 @@ enum KeyboardEmitter {
         )
         return await send(
             command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
-            observer: observer, delivery: delivery
+            observer: observer, hooks: hooks, delivery: delivery
         )
     }
 
@@ -49,6 +50,7 @@ enum KeyboardEmitter {
         isValid: @escaping @MainActor () -> Bool,
         beforeKeyDown: @escaping @MainActor () -> Bool,
         observer: @escaping @MainActor (Phase) -> Void = { _ in },
+        hooks: ClipboardDispatchHooks? = nil,
         delivery: Delivery
     ) async -> Bool {
         observer(.started)
@@ -59,6 +61,12 @@ enum KeyboardEmitter {
         #endif
         logger.info("transport=pid targetPID=\(targetPID, privacy: .public)")
         let paced = command == .copy || command == .paste
+        if let hooks {
+            return await sendTracked(events: events, configuration: .init(
+                command: command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
+                observer: observer, hooks: hooks, delivery: delivery
+            ))
+        }
         if !paced {
             for event in events { delivery.post(event, targetPID) }
             return isValid()

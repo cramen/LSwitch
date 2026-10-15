@@ -46,12 +46,13 @@ enum MenuCommand {
     static func invoke(
         _ command: ClipboardCommand,
         targetPID: pid_t,
-        isValid: () -> Bool
+        isValid: () -> Bool,
+        hooks: ClipboardDispatchHooks? = nil
     ) -> Outcome {
         guard command == .copy || command == .paste else { return .unavailable }
         guard targetPID > 0, isValid() else { return .failed }
         guard let item = enabledItem(command, targetPID: targetPID) else { return .unavailable }
-        return press(item, command: command, isValid: isValid)
+        return press(item, command: command, isValid: isValid, hooks: hooks)
     }
 
     /// Paste разрешён после устойчивого AX-выделения и повторной проверки меню/контекста.
@@ -59,7 +60,8 @@ enum MenuCommand {
         targetPID: pid_t,
         select: () async -> Bool,
         afterSelectionCheck: () -> Bool,
-        isValid: () -> Bool
+        isValid: () -> Bool,
+        hooks: ClipboardDispatchHooks? = nil
     ) async -> Outcome {
         guard targetPID > 0, isValid() else {
             logger.notice("transport=menu stage=prepare context=false")
@@ -85,7 +87,7 @@ enum MenuCommand {
         }
         guard let current = enabledItem(.paste, targetPID: targetPID), CFEqual(current, item),
               isValid(), afterSelectionCheck() else { return .failed }
-        return press(item, command: .paste, isValid: isValid)
+        return press(item, command: .paste, isValid: isValid, hooks: hooks)
     }
 
     private static func enabledItem(_ command: ClipboardCommand, targetPID: pid_t) -> AXUIElement? {
@@ -95,16 +97,33 @@ enum MenuCommand {
         return item
     }
 
-    private static func press(_ item: AXUIElement, command: ClipboardCommand, isValid: () -> Bool) -> Outcome {
+    private static func press(
+        _ item: AXUIElement, command: ClipboardCommand, isValid: () -> Bool, hooks: ClipboardDispatchHooks?
+    ) -> Outcome {
         guard isValid() else { return .failed }
         SystemAXTextAccess.limitMessaging(item)
-        let result = AXUIElementPerformAction(item, kAXPressAction as CFString)
+        let result = dispatch(command, isValid: isValid, hooks: hooks) {
+            AXUIElementPerformAction(item, kAXPressAction as CFString)
+        }
         guard isValid() else { return .failed }
         // После select AXPress может быть неоднозначным: не повторяем команды.
         guard result == .success else { return .failed }
         let key = command == .copy ? "c" : "v"
         logger.info("transport=menu command=\(key, privacy: .public)")
         return .performed
+    }
+
+    /// Подменяемая граница именно AXPress, без поиска меню и без выдуманного ACK.
+    static func dispatch(
+        _ command: ClipboardCommand, isValid: () -> Bool, hooks: ClipboardDispatchHooks?,
+        perform: () -> AXError
+    ) -> AXError? {
+        guard isValid() else { return nil }
+        guard let hooks else { return perform() }
+        guard let token = hooks.beforeSend(command.submissionKind) else { return nil }
+        let result = perform()
+        hooks.didReturn(.init(submission: token, transport: .menu, status: result))
+        return result
     }
 
     static func matches(_ command: ClipboardCommand, character: String?, modifiers: Int?, enabled: Bool) -> Bool {
