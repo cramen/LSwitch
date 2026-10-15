@@ -115,10 +115,10 @@ enum AcceptanceProbe {
         guard JSONSerialization.isValidJSONObject(report),
               let data = try? JSONSerialization.data(
                 withJSONObject: report, options: [.prettyPrinted, .sortedKeys]
-              ) else {
+              ), let encoded = String(bytes: data, encoding: .utf8) else {
             print("{\"result\":{\"ok\":false,\"error\":\"report-encoding\"}}")
             return
         }
-        print(String(decoding: data, as: UTF8.self))
+        print(encoded)
     }
 }

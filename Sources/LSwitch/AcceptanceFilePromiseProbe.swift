@@ -65,7 +65,7 @@ enum AcceptanceFilePromiseProbe {
         board.clearContents()
         guard board.writeObjects([provider]) else { return ["ok": false, "error": "file-promise-publish"] }
         let advertised = Set((board.pasteboardItems ?? []).flatMap { $0.types.map(\.rawValue) })
-        let recognized = !advertised.intersection(NSFilePromiseReceiver.readableDraggedTypes).isEmpty
+        let recognized = !advertised.isDisjoint(with: NSFilePromiseReceiver.readableDraggedTypes)
         let snapshot = PasteboardService.capture(from: board)
         let before = board.changeCount
         let refused = !PasteboardService.restore(snapshot, to: board)

@@ -6,8 +6,10 @@ import XCTest
 @MainActor
 final class ClipboardNativeSelectionTests: XCTestCase {
     func testVerifiedNativeSelectionConvertsBothDirectionsWithoutCopyOrAXSetter() async {
-        let fixtures: [(String, String, Layout)] = [("ghbdtn", "привет", .english), ("цщкдв", "world", .russian)]
-        for (original, converted, layout) in fixtures {
+        let fixtures: [((String, String), Layout)] = [
+            (("ghbdtn", "привет"), .english), (("цщкдв", "world"), .russian)
+        ]
+        for ((original, converted), layout) in fixtures {
             let editor = nativeEditor("🙂 " + original + " ")
             editor.rangeSettable = false
             let result = await editor.converter().perform(request(word: original, layout: layout))
@@ -107,8 +109,11 @@ final class ClipboardNativeSelectionTests: XCTestCase {
             let editor = nativeEditor("prefix ghbdtn ")
             editor.afterCommand = { command in
                 if case .selectCharacters = command {
-                    if changesFocus { editor.current = false }
-                    else { editor.selection = 0..<3 }
+                    if changesFocus {
+                        editor.current = false
+                    } else {
+                        editor.selection = 0..<3
+                    }
                 }
             }
             let result = await editor.converter().perform(request())

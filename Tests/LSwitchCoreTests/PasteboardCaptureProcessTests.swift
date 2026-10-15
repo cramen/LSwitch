@@ -58,7 +58,8 @@ final class PasteboardCaptureProcessTests: XCTestCase {
             changeCountBefore: 1, changeCountAfter: 1
         )
         let data = try JSONEncoder().encode(reply)
-        let payload = String(decoding: data, as: UTF8.self).replacingOccurrences(of: "'", with: "'\\''")
+        let encoded = try XCTUnwrap(String(bytes: data, encoding: .utf8))
+        let payload = encoded.replacingOccurrences(of: "'", with: "'\\''")
         let script = "#!/bin/sh\n\(beforeWrite)\nprintf '%s' '\(payload)'\n\(afterWrite)\n"
         try Data(script.utf8).write(to: executable)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)

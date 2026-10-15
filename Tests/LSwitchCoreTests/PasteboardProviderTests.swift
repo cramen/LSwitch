@@ -173,7 +173,7 @@ final class PasteboardProviderTests: XCTestCase {
         let promise = NSFilePromiseProvider(fileType: UTType.plainText.identifier, delegate: delegate)
         XCTAssertTrue(board.writeObjects([promise]))
         let types = Set((board.pasteboardItems ?? []).flatMap { $0.types.map(\.rawValue) })
-        XCTAssertFalse(types.intersection(NSFilePromiseReceiver.readableDraggedTypes).isEmpty)
+        XCTAssertFalse(types.isDisjoint(with: NSFilePromiseReceiver.readableDraggedTypes))
         let snapshot = PasteboardService.capture(from: board)
         XCTAssertTrue(snapshot.containsFilePromises)
         XCTAssertFalse(snapshot.isRestorable)

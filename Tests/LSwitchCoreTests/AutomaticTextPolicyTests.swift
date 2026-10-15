@@ -3,7 +3,7 @@ import Foundation
 import XCTest
 
 final class AutomaticTextPolicyTests: XCTestCase {
-    func testUnseenIdentifiersAreCodeWithoutAWordBlacklist() {
+    func testUnseenIdentifiersAreCodeWithoutAnIdentifierList() {
         for language in [SourceLanguage.swift, .javascript, .python, .cLike] {
             for prefix in ["let ", "const ", "var ", "func ", "def ", "return ", "object."] {
                 XCTAssertEqual(region(prefix + "ytpfdbcbvsq ", language: language), .code)

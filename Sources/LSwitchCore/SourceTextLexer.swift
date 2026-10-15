@@ -30,13 +30,23 @@ struct SourceTextLexer {
         return first
     }
 
-    private typealias Step = (length: Int, region: Region, state: State)
+    private struct Step {
+        let length: Int
+        let region: Region
+        let state: State
+
+        init(_ length: Int, _ region: Region, _ state: State) {
+            self.length = length
+            self.region = region
+            self.state = state
+        }
+    }
 
     private func advance(at position: Int, state: State) -> Step? {
         switch state {
         case .code: return advanceCode(at: position)
         case .lineComment:
-            return (1, .comment, isNewline(units[position]) ? .code : state)
+            return Step(1, .comment, isNewline(units[position]) ? .code : state)
         case .blockComment(let depth): return advanceComment(at: position, depth: depth)
         case .quoted(let quote, let triple): return advanceString(at: position, quote: quote, triple: triple)
         }
@@ -44,31 +54,31 @@ struct SourceTextLexer {
 
     private func advanceCode(at position: Int) -> Step? {
         let unit = units[position]
-        if language == .python, unit == 35 { return (1, .code, .lineComment) }
-        if language != .python, matches([47, 47], at: position) { return (2, .code, .lineComment) }
-        if language != .python, matches([47, 42], at: position) { return (2, .code, .blockComment(1)) }
+        if language == .python, unit == 35 { return Step(1, .code, .lineComment) }
+        if language != .python, matches([47, 47], at: position) { return Step(2, .code, .lineComment) }
+        if language != .python, matches([47, 42], at: position) { return Step(2, .code, .blockComment(1)) }
         // JS/Swift допускают regex literal; без полноценного parser '/' неоднозначен.
         if unit == 47, language == .javascript || language == .swift { return nil }
         if unit == 96, language == .javascript { return nil }
         if unit == 35, language == .swift,
            next(after: position) == 34 || next(after: position) == 47 { return nil }
-        guard unit == 34 || unit == 39 else { return (1, .code, .code) }
+        guard unit == 34 || unit == 39 else { return Step(1, .code, .code) }
         if language == .swift, unit == 39 { return nil }
         guard !hasUnsupportedPrefix(at: position) else { return nil }
         let triple = matches([unit, unit, unit], at: position)
         if triple, language != .python && language != .swift { return nil }
-        return (triple ? 3 : 1, .code, .quoted(unit, triple))
+        return Step(triple ? 3 : 1, .code, .quoted(unit, triple))
     }
 
     private func advanceComment(at position: Int, depth: Int) -> Step? {
         if matches([47, 42], at: position) {
             guard language == .swift else { return nil }
-            return (2, .code, .blockComment(depth + 1))
+            return Step(2, .code, .blockComment(depth + 1))
         }
         if matches([42, 47], at: position) {
-            return (2, .code, depth == 1 ? .code : .blockComment(depth - 1))
+            return Step(2, .code, depth == 1 ? .code : .blockComment(depth - 1))
         }
-        return (1, .comment, .blockComment(depth))
+        return Step(1, .comment, .blockComment(depth))
     }
 
     private func advanceString(at position: Int, quote: UInt16, triple: Bool) -> Step? {
@@ -77,14 +87,14 @@ struct SourceTextLexer {
         if unit == 92 {
             guard let following = next(after: position) else { return nil }
             if language == .swift, following == 40 { return nil }
-            return (2, .code, state)
+            return Step(2, .code, state)
         }
         if language == .cLike, unit == 36 { return nil }
         if !triple, isNewline(unit) { return nil }
-        if triple, matches([quote, quote, quote], at: position) { return (3, .code, .code) }
-        if !triple, unit == quote { return (1, .code, .code) }
+        if triple, matches([quote, quote, quote], at: position) { return Step(3, .code, .code) }
+        if !triple, unit == quote { return Step(1, .code, .code) }
         let region: Region = language == .cLike && quote == 39 ? .code : .string
-        return (1, region, state)
+        return Step(1, region, state)
     }
 
     private func hasUnsupportedPrefix(at position: Int) -> Bool {

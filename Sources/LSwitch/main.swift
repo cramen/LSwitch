@@ -205,10 +205,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let bundleID = currentFrontmostBundleID()
         Task { [converter, autoSwitch] in
             let rejection: ConversionDiagnostics.Rejection?
-            if !self.settings.enabled { rejection = .rules }
-            else if self.inputGeneration != generation { rejection = .generationChanged }
-            else if self.currentFrontmostBundleID() != bundleID { rejection = .applicationChanged }
-            else { rejection = target.invalidationReason }
+            if !self.settings.enabled {
+                rejection = .rules
+            } else if self.inputGeneration != generation {
+                rejection = .generationChanged
+            } else if self.currentFrontmostBundleID() != bundleID {
+                rejection = .applicationChanged
+            } else {
+                rejection = target.invalidationReason
+            }
             if let rejection {
                 converter.recordSkippedAutomatic(
                     triggerTimestamp: triggerTimestamp, bundleID: bundleID, reason: rejection

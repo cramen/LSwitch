@@ -5,6 +5,18 @@ import XCTest
 final class QuotedAutoSwitchPipelineTests: XCTestCase {
     private var suites: [String] = []
 
+    private struct Fixture {
+        let language: SourceLanguage
+        let input: String
+        let expected: String
+
+        init(_ language: SourceLanguage, _ input: String, _ expected: String) {
+            self.language = language
+            self.input = input
+            self.expected = expected
+        }
+    }
+
     override func tearDown() {
         for suite in suites { UserDefaults.standard.removePersistentDomain(forName: suite) }
         suites.removeAll()
@@ -13,15 +25,18 @@ final class QuotedAutoSwitchPipelineTests: XCTestCase {
 
     @MainActor
     func testOpeningAndClosingQuotesSurviveTheCompleteCandidatePipeline() throws {
-        let fixtures: [(SourceLanguage, String, String)] = [
-            (.swift, "let message = \"ghbdtn ", "let message = \"привет "),
-            (.swift, "let message = \"ghbdtn\", ", "let message = \"привет\", "),
-            (.javascript, "const message = \"ghbdtn ", "const message = \"привет "),
-            (.python, "message = 'ghbdtn' ", "message = 'привет' "),
-            (.swift, "let message = \"\"\"ghbdtn ", "let message = \"\"\"привет "),
-            (.python, "message = '''ghbdtn ", "message = '''привет ")
+        let fixtures: [Fixture] = [
+            .init(.swift, "let message = \"ghbdtn ", "let message = \"привет "),
+            .init(.swift, "let message = \"ghbdtn\", ", "let message = \"привет\", "),
+            .init(.javascript, "const message = \"ghbdtn ", "const message = \"привет "),
+            .init(.python, "message = 'ghbdtn' ", "message = 'привет' "),
+            .init(.swift, "let message = \"\"\"ghbdtn ", "let message = \"\"\"привет "),
+            .init(.python, "message = '''ghbdtn ", "message = '''привет ")
         ]
-        for (language, input, expected) in fixtures {
+        for fixture in fixtures {
+            let language = fixture.language
+            let input = fixture.input
+            let expected = fixture.expected
             let pipeline = try pipeline(input)
             XCTAssertEqual(pipeline.candidate.word, "ghbdtn")
             XCTAssertTrue(pipeline.request.permitsAutomaticContext(source(input, language), plan: pipeline.plan))
