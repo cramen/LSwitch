@@ -55,10 +55,19 @@ public final class ClipboardConverter: ConversionEngine {
     }
 
     #if DEBUG
-    public convenience init(acceptanceConfiguration: Configuration, keyboardOnly: Bool) {
+    public convenience init(
+        acceptanceConfiguration: Configuration, keyboardOnly: Bool, testApplicationBundleID: String? = nil
+    ) {
         self.init(
             configuration: acceptanceConfiguration,
-            environment: .live(pasteboard: .general, keyboardOnly: keyboardOnly)
+            environment: .live(
+                pasteboard: .general, keyboardOnly: keyboardOnly,
+                applicationPolicy: .init(
+                    keyboardOnly: keyboardOnly,
+                    forceCopyForAcceptance: acceptanceConfiguration.forceCopyForAcceptance,
+                    testApplicationBundleID: testApplicationBundleID
+                )
+            )
         )
     }
     #endif

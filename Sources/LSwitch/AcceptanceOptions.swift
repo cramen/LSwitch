@@ -31,7 +31,10 @@ enum AcceptanceOptions {
         if selectedEngine == .keyboard {
             var configuration = ClipboardConverter.Configuration()
             configuration.forceCopyForAcceptance = true
-            return ClipboardConverter(acceptanceConfiguration: configuration, keyboardOnly: true)
+            return ClipboardConverter(
+                acceptanceConfiguration: configuration, keyboardOnly: true,
+                testApplicationBundleID: argument("--test-app-bundle=")
+            )
         }
         #endif
         return ClipboardConversionEngine()

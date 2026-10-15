@@ -13,14 +13,6 @@ public final class UnicodeTextConverter: ConversionEngine {
         self.environment = environment
     }
 
-    private struct Captured {
-        let context: UnicodeEnvironment.Context
-        let request: ConversionRequest
-        let source: UnicodeInputSource
-        let automatic: AutomaticTextContext
-        let targetCheck: ConversionReceipt.TargetCheck
-    }
-
     public func perform(_ request: ConversionRequest) async -> ConversionResult {
         #if DEBUG
         return await UnicodePerformance.profile { await execute(request) }
@@ -36,8 +28,8 @@ public final class UnicodeTextConverter: ConversionEngine {
         return result
     }
 
-    private func capture(_ request: ConversionRequest) -> Captured? {
-        guard !Task.isCancelled, request.isValid(), let context = environment.captureContext(), context.isValid() else {
+    private func capture(_ request: ConversionRequest) -> UnicodeReadBoundary? {
+        guard !Task.isCancelled, request.isValid(), let context = environment.captureContext() else {
             request.diagnostics?.reject(.contextUnavailable)
             return nil
         }
@@ -49,31 +41,14 @@ public final class UnicodeTextConverter: ConversionEngine {
             request.diagnostics?.reject(.unicodeInputSourceUnsupported)
             return nil
         }
-        // Identity захватывается до чтения текста, затем повторяется в scoped guards.
-        guard let identity = context.documentIdentity() else {
-            request.diagnostics?.reject(.unicodeSnapshotUnverified)
-            return nil
-        }
-        let targetCheck: ConversionReceipt.TargetCheck = {
-            context.isValid() && context.documentIdentity() == identity
-        }
-        let automatic = request.isAutomatic ? context.automaticContext() : .prose
-        let scoped = request.checkingTarget(targetCheck).checkingDocumentContext(
-            automatic, read: context.automaticContext
+        return UnicodeReadBoundary.capture(
+            context: context, request: request, source: source, activeSource: environment.activeSource
         )
-        return Captured(context: context, request: scoped, source: source,
-                        automatic: automatic, targetCheck: targetCheck)
     }
 
-    private func prepare(_ captured: Captured) -> UnicodeTransaction? {
-        let context = captured.context
+    private func prepare(_ captured: UnicodeReadBoundary) -> UnicodeTransaction? {
         let request = captured.request
-        guard request.isValid(), context.isValid(), let snapshot = context.snapshot(),
-              request.isValid(), context.isValid() else { return nil }
-        guard snapshot.isComplete else {
-            request.diagnostics?.reject(.unicodeSnapshotUnverified)
-            return nil
-        }
+        guard let snapshot = captured.read() else { return nil }
         guard let plan = AXReplacementPlan(
             text: snapshot.text, selection: snapshot.selection, request: request, transform: request.converted
         ) else {
@@ -98,12 +73,12 @@ public final class UnicodeTextConverter: ConversionEngine {
             request.diagnostics?.reject(.keyboardUndoUnavailable)
             return nil
         }
-        guard let packet = environment.prepare(plan.replacement, context.processID) else {
+        guard let packet = environment.prepare(plan.replacement, captured.processID) else {
             request.diagnostics?.reject(.unicodePreparationFailed)
             return nil
         }
         return UnicodeTransaction(
-            environment: environment, context: context, request: request, source: captured.source,
+            environment: environment, boundary: captured,
             plan: plan, keyboardPlan: keyboardPlan, packet: packet
         )
     }

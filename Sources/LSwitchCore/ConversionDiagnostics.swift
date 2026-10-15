@@ -33,7 +33,7 @@ public final class ConversionDiagnostics {
         case textChanged, selectionChanged, textNotConfirmed, layoutNotConfirmed, documentChanged
         case sourceCode, sourceContextUnknown, sourceDocumentChanged, sourceSnapshotUnverified
         case unicodeSnapshotUnverified, unicodeInputSourceUnsupported
-        case unicodePayloadUnsupported, unicodePreparationFailed
+        case unicodePayloadUnsupported, unicodePreparationFailed, unverifiedEditorModel
     }
 
     public enum Completion: String, Sendable {

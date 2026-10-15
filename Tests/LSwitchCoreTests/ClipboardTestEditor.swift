@@ -13,6 +13,7 @@ final class ClipboardEditor {
     var writes = 0
     var sleeps = 0
     var preparations = 0
+    var contextCaptures = 0
     var stateReads = 0
     var inputBarriers = 0
     var diagnosticsBindings: [Bool] = []
@@ -42,6 +43,8 @@ final class ClipboardEditor {
     var captureOverride: (() async -> PasteboardCaptureResult)?
     var documentContext: AutomaticTextContext = .prose
     var selectionMethod: ClipboardEnvironment.SelectionMethod = .accessibility
+    var applicationBundleID: String? = "test.app"
+    var applicationPolicy = ClipboardApplicationPolicy()
     var onContextRead: () -> Void = {}
     var keepPastedSelection = false
     var rejectPaste = false
@@ -80,7 +83,9 @@ final class ClipboardEditor {
 
     func converter(configuration: ClipboardConverter.Configuration = .init()) -> ClipboardConverter {
         ClipboardConverter(configuration: configuration, environment: ClipboardEnvironment(
-            captureContext: { self.makeContext() },
+            captureContext: {
+                self.applicationPolicy.capture(bundleID: self.applicationBundleID) { self.makeContext() }
+            },
             prepare: { isValid in
                 guard isValid() else { return }
                 self.preparations += 1
@@ -122,6 +127,7 @@ final class ClipboardEditor {
     }
 
     private func makeContext() -> ClipboardEnvironment.Context? {
+        contextCaptures += 1
         guard safe else { return nil }
         return ClipboardEnvironment.Context(
             isValid: { self.safe && self.current },

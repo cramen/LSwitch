@@ -92,7 +92,7 @@ final class UnicodeFailureTests: XCTestCase {
 
     func testActiveSourceChangeBeforeDownCancelsAndCleansSelection() async {
         let editor = UnicodeTestEditor("ghbdtn ")
-        editor.onPause = { count in if count == 2 { editor.source = nil } }
+        editor.onPause = { _ in if editor.downCount == 0 { editor.source = nil } }
         let result8 = await editor.converter().perform(editor.request())
         XCTAssertEqual(result8, .failed)
         XCTAssertEqual(editor.downCount, 0)
@@ -164,8 +164,12 @@ final class UnicodeFailureTests: XCTestCase {
         XCTAssertEqual(originalPrefix, foreignPrefix)
         XCTAssertEqual(originalPrefix.utf16.count, foreignPrefix.utf16.count)
         let editor = UnicodeTestEditor(originalPrefix + "ghbdtn ")
-        editor.onPause = { count in
-            if count == 4 { editor.text = foreignPrefix + "привет " }
+        var resultObserved = false
+        editor.onRead = {
+            if editor.downCount == 1 { resultObserved = true }
+        }
+        editor.onPause = { _ in
+            if resultObserved { editor.text = foreignPrefix + "привет " }
         }
         let result = await editor.converter().perform(editor.request())
         XCTAssertEqual(result, .failed)

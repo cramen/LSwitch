@@ -29,14 +29,6 @@ struct UnicodeTextSnapshot {
 struct UnicodeEnvironment {
     enum SelectionCommand: Equatable { case select(Int), collapse }
 
-    struct Context {
-        let processID: pid_t
-        var isValid: @MainActor @Sendable () -> Bool
-        var snapshot: () -> UnicodeTextSnapshot?
-        var automaticContext: @MainActor @Sendable () -> AutomaticTextContext
-        var documentIdentity: @MainActor @Sendable () -> String?
-    }
-
     var captureContext: () -> Context?
     var activeSource: () -> UnicodeInputSource?
     var canPost: () -> Bool

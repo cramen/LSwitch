@@ -13,7 +13,10 @@ final class UnicodeTestEditor {
     var provenance = UnicodeTextSnapshot.Provenance.chromiumTextControl
     var characterCount: Int?
     var contextValid = true
+    var protectedField = false
     var requestValid = true
+    var leaseValid = true
+    var revision = 0
     var cleanupValid = true
     var postAllowed = true
     var prepareAllowed = true
@@ -27,16 +30,27 @@ final class UnicodeTestEditor {
     var pendingText: (due: Int, value: String)?
     var pauses = 0
     var reads = 0
+    var valueReads = 0
+    var coordinateReads = 0
+    var identityReads = 0
+    var currentChecks = 0
     var downCount = 0
     var upCount = 0
     var prepares = 0
     var beginCount = 0
     var onRead: (() -> Void)?
+    var afterMetadataRead: (() -> Void)?
+    var afterValueRead: (() -> Void)?
+    var onIdentityRead: (() -> Void)?
     var onPause: ((Int) -> Void)?
     var onDown: (() -> Void)?
     var onPrepare: (() -> Void)?
     var beforePacketCheck: (() -> Void)?
     var afterSelectionCommand: ((UnicodeEnvironment.SelectionCommand) -> Void)?
+    var omitSelectionAfterCallback = false
+    var selectionAfterCallbackCount = 1
+    var selectReturnValue = true
+    var beforeRepeatedSelectionAfter: (() -> Void)?
     var selectionPreflights = 0
     var selectionPostflights = 0
 
@@ -46,10 +60,15 @@ final class UnicodeTestEditor {
     }
 
     func request(word: String = "ghbdtn", tail: String = " ", manual: Bool = false) -> ConversionRequest {
-        ConversionRequest(
+        let started = revision
+        return ConversionRequest(
             expectedWord: word, trailingText: tail, sourceLayout: source?.layout, useSelection: manual,
-            beginMutation: { self.beginCount += 1; return self.requestValid },
-            canCleanup: { self.cleanupValid }, isValid: { self.requestValid }
+            beginMutation: {
+                self.beginCount += 1
+                return self.requestValid && self.leaseValid && self.revision == started
+            },
+            canCleanup: { self.cleanupValid },
+            isValid: { self.requestValid && self.leaseValid && self.revision == started }
         )
     }
 
@@ -57,8 +76,8 @@ final class UnicodeTestEditor {
         UnicodeTextConverter(environment: UnicodeEnvironment(
             captureContext: {
                 UnicodeEnvironment.Context(
-                    processID: 123, isValid: { self.contextValid }, snapshot: { self.snapshot() },
-                    automaticContext: { self.automatic }, documentIdentity: { self.document }
+                    processID: 123, isCurrent: { self.isCurrent() }, rawSnapshot: { self.snapshot(canReadText: $0) },
+                    automaticContext: { self.automatic }, rawDocumentIdentity: { self.readIdentity() }
                 )
             }, activeSource: { self.source }, canPost: { self.postAllowed }, prepare: { text, _ in
                 self.prepares += 1
@@ -76,20 +95,45 @@ final class UnicodeTestEditor {
                     return true
                 }
             }, sendSelection: { command, _, before, after in
-                self.selectionPreflights += 1
-                guard before() else { return false }
-                self.commands.append(command)
-                if self.selectionDelay > 0 || !self.pending.isEmpty {
-                    let due = self.pending.last?.due ?? (self.pauses + self.selectionDelay)
-                    self.pending.append((due, command))
-                } else {
-                    self.apply(command)
-                }
-                self.afterSelectionCommand?(command)
-                self.selectionPostflights += 1
-                return after()
+                self.sendSelection(command, before: before, after: after)
             }, pause: { self.advanceReceiver() }
         ))
+    }
+
+    private func sendSelection(
+        _ command: UnicodeEnvironment.SelectionCommand, before: () -> Bool, after: () -> Bool
+    ) -> Bool {
+        selectionPreflights += 1
+        guard before() else { return false }
+        commands.append(command)
+        if selectionDelay > 0 || !pending.isEmpty {
+            let due = pending.last?.due ?? (pauses + selectionDelay)
+            pending.append((due, command))
+        } else {
+            apply(command)
+        }
+        afterSelectionCommand?(command)
+        let selecting: Bool
+        if case .select = command { selecting = true } else { selecting = false }
+        if selecting && omitSelectionAfterCallback { return selectReturnValue }
+        let count = selecting ? max(1, selectionAfterCallbackCount) : 1
+        for index in 0..<count {
+            if index > 0 { beforeRepeatedSelectionAfter?() }
+            selectionPostflights += 1
+            guard after() else { return false }
+        }
+        return !selecting || selectReturnValue
+    }
+
+    func isCurrent() -> Bool {
+        currentChecks += 1
+        return contextValid && !protectedField
+    }
+
+    func readIdentity() -> String? {
+        identityReads += 1
+        onIdentityRead?()
+        return document
     }
 
     func advanceReceiver() {
@@ -105,9 +149,17 @@ final class UnicodeTestEditor {
         }
     }
 
-    func snapshot() -> UnicodeTextSnapshot {
+    func snapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
         reads += 1
-        let snapshot = UnicodeTextSnapshot(text: text, selection: selection,
+        afterMetadataRead?()
+        guard canReadText() else { return nil }
+        valueReads += 1
+        let value = text
+        let selected = selection
+        afterValueRead?()
+        guard canReadText() else { return nil }
+        coordinateReads += 1
+        let snapshot = UnicodeTextSnapshot(text: value, selection: selected,
                                            characterCount: characterCount ?? text.utf16.count,
                                            coordinateText: text,
                                            provenance: provenance)

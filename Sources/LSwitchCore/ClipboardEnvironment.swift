@@ -35,11 +35,15 @@ struct ClipboardEnvironment {
     var waitForPendingInput: () async -> Void = {}
     var bindDiagnostics: (ConversionDiagnostics?) -> Void = { _ in }
 
-    static func live(pasteboard: NSPasteboard, keyboardOnly: Bool = false) -> ClipboardEnvironment {
+    static func live(
+        pasteboard: NSPasteboard, keyboardOnly: Bool = false,
+        applicationPolicy: ClipboardApplicationPolicy? = nil
+    ) -> ClipboardEnvironment {
         let binding = ClipboardDiagnosticsBinding()
         let transport = makeTransport(forceKeyboard: keyboardOnly, diagnostics: binding)
+        let policy = applicationPolicy ?? ClipboardApplicationPolicy()
         return ClipboardEnvironment(
-            captureContext: { makeContext() },
+            captureContext: { makeContext(applicationPolicy: policy) },
             prepare: { transport.prepare(isValid: $0) },
             capture: {
                 await PasteboardCaptureWorker.shared.capture(named: pasteboard.name.rawValue,
@@ -97,11 +101,17 @@ struct ClipboardEnvironment {
         )
     }
 
-    private static func makeContext() -> Context? {
-        guard let target = InputSafety.captureTarget() else { return nil }
-        let keyboardSelection = AppProfiles.prefersKeyboardSelection(
-            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-        )
+    private static func makeContext(applicationPolicy: ClipboardApplicationPolicy) -> Context? {
+        guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+        return applicationPolicy.capture(bundleID: application.bundleIdentifier) {
+            guard let target = InputSafety.captureTarget(),
+                  target.capturedApplicationPID == application.processIdentifier else { return nil }
+            return makeContext(target: target, bundleID: application.bundleIdentifier)
+        }
+    }
+
+    private static func makeContext(target: InputTarget, bundleID: String?) -> Context {
+        let keyboardSelection = AppProfiles.prefersKeyboardSelection(bundleID: bundleID)
         return Context(isValid: { target.isCurrent() }, selectedText: {
             guard target.isCurrent() else { return nil }
             var value: CFTypeRef?

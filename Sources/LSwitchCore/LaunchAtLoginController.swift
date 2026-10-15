@@ -56,7 +56,7 @@ public final class LaunchAtLoginController: ObservableObject {
         case .requiresApproval:
             return "Автозапуск зарегистрирован, но macOS требует разрешение в разделе «Объекты входа»."
         case .notFound:
-            return "macOS не нашла приложение для регистрации автозапуска."
+            return "macOS пока не подтверждает регистрацию автозапуска."
         }
     }
 

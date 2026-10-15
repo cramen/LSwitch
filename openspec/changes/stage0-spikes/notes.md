@@ -344,7 +344,8 @@ preservation/receiver контракта после отказа, не пере�
 SHA `21a1a5a2777d8260de8ab6b99fbc55911d2151f21591c698e493d1e3a6c1a890`;
 после DEBUG-сценариев запущен обычный режим PID 46088,
 `.build/acceptance-489-normal.jsonl`. Unicode остаётся DEBUG-only, default выключен.
-Последний опубликованный green CI — `2ca1f03` с 417 тестами; 489 своего CI ещё не имеет.
+На момент локального прогона green CI был `2ca1f03` с 417 тестами; последующий
+checkpoint `2abf560` подтвердил 489, см. дополнение ниже.
 
 Chrome 467 подтвердил auto в обе стороны, продолжение `world hello` и receipt undo,
 включая исходный NBSP в rich. Auto467–489 занял 289–337 мс: цель ≤200 мс не пройдена.
@@ -364,3 +365,137 @@ Chrome 467 подтвердил auto в обе стороны, продолже�
 Лог `.build/matrix-489-normal-safari-helper{,-diagnostics}.log`.
 Прочие сценарии/точные SHA и числа — в [общем протоколе](../../../docs/acceptance-2026-10-15.md).
 Составные задачи не закрывались; legacy promise/race PASS сохраняют свой отдельный объём.
+
+## CI 489 и статус Telegram, 2026-10-15
+
+[Checkpoint `2abf560`](https://github.com/cramen/LSwitch/actions/runs/38734859621)
+прошёл CI в 15:29 МСК: build,489 тестов без ошибок/пропусков, SwiftLint strict
+0 нарушений в 143 файлах. Лог `.build/checkpoint-2abf560-ci.log`.
+Следующая рабочая оптимизация `UnicodeReadBoundary` этим CI не покрыта и не принята.
+Unicode остаётся DEBUG-only; ограничения и превышение 200 мс сохраняются.
+
+Telegram: CUA-открытие отклонено автоматической проверкой безопасности.
+Разрешение на отдельное пустое «Избранное» без отправки сообщений запрошено;
+на том шаге ответ ещё ожи дался. Статус был `blocked-by-permission`, строка не проверена,
+обход другим инструментом не выполнялся. Составные checkbox не менялись.
+
+## Локальная 503: VS Code и физический Telegram
+
+15 октября в 15:59:38 МСК build/test/app подтвердили **503 теста без ошибок/пропусков**;
+`.build/unicode-boundary-vscode-{build,tests,app}.log`. SHA
+`8d53d7826d1035d986656ef8f6e69923a57c95ea71fa5b08fef47c2c8dbf8ffb`, normal PID 50457,
+`.build/acceptance-503-normal.jsonl`. ReadBoundary/permission boundaries,
+captured PID и D13 default gate включены; собственного CI 503 ещё нет.
+На этом шаге Chrome performance503 ещё не измеряли; поздний 503b замер приведён ниже.
+Живая проверка gate выполнена ниже.
+
+VS Code 489 сначала подтвердил manual/receipt undo за 260,467/245,265 мс,
+но reverse попытка вставила `приветghbdtn` (Col 13) вместо замены. Журнал:
+`textNotConfirmed`342,762 мс, затем `expectedSpanMismatch`; пустой clipboard сохранён,
+count 3230. Поэтому 503 отказывает по `unverifiedEditorModel` по умолчанию;
+пять unit-проверок прошли, рабочей совместимости VS Code это не означает.
+Логи `.build/matrix-489-normal-vscode-{manual-undo,reverse-undo}{,-diagnostics}.log`.
+
+Пользователь разрешил Telegram, прежний блок допуска снят. CUA предоставлял только
+окно/меню, без доступного поля и screenshot; после разрешённой активации и Cmd+0
+ввод агентом не выполнялся, сообщения не отправлялись. Пользователь проверил
+собственное «Избранное» физически. Первый опыт дал две конвертации за 176,509/164,477 мс
+с gap 4,2 с, поэтому точным undo не считается. Повтор дал две реальные пары:
+converted 158,306/undone 132,983 и converted 133,592/undone 123,210 мс,
+engineAX, auto=false, обе TIS RU→EN→RU. Исходный текст визуально подтверждён
+пользователем. Лог `.build/matrix-503-telegram-human-undo-repeat.log`.
+Manual AX/receipt undo — PASS конкретного сценария. Затем пользователь физически
+набрал `ghbdtn` Space `vbh` Space и подтвердил «привет мир». Журнал операции 7:
+AX, auto=true, repeat после шести manual, EN→RU, 176,789 мс, target200=true.
+Это PASS одного прогретого auto, не cold start; clipboard empty/count 3230/hash сохранены.
+Лог `.build/matrix-503-telegram-human-auto.log`. Задача 3.3 остаётся открытой.
+
+Живой VS Code 503 default-отказ `unverifiedEditorModel` подтверждён за 6,369 мс
+до snapshot/capture/write/selection: исходные `приветghbdtn`, Col 13 и clipboard3230
+не изменены. `.build/matrix-503-normal-vscode-refusal{,-diagnostics}.log`.
+Это PASS безопасного отказа, не совместимость VS Code. После human auto через UI
+восстановлены autoOFF, enabledON, soundON, loginOFF, undo 3 с, learning 2, пустые исключения.
+
+## 503b: первый Chrome auto и регистрация Login Item
+
+Build/test/app 503b прошли 15 октября в 16:31:10 МСК: 503 теста, 0 ошибок/пропусков,
+`.build/503-caption-{build,tests,app}.log`. Нейтральная подпись notFound включена
+без изменения поведения. Бинарник
+`72acf06bc6f6dc821ae5f5d959bbf53aae78bea8e17ef125f72ebc1e0032e5c0`, PID 54012,
+DEBUG unicodeChrome; `.build/acceptance-503b-unicode-chrome.jsonl`.
+
+Первый фактический Chrome EN→RU auto завершился `converted` за 261,394 мс,
+TIS RU подтверждён; CUA показал точное `привет ` с ASCII-пробелом.
+Пустой clipboard/count 3230/hash 338a3d… сохранён. Это текстовый PASS, latency ≤200 мс FAIL.
+Engine 240,078 мс; isCurrent 66/67,889 мс, documentIdentity 22/24,036 мс,
+snapshot 10/17,329 мс. Inclusive длительности не суммируются.
+Лог `.build/matrix-503b-chrome-auto-first-en-diagnostics.log`.
+
+Свежий UI-цикл Login Item OFF/notFound→ON/enabled→OFF/notRegistered прошёл
+без ошибок; status после register/unregister перечитан системным адаптером через
+Controller.refresh. Локатор `.build/login-503b-ui-on-off.json`.
+Logout не выполнялся; pending/error/фактический вход не приняты.
+Это частичный прогресс, составные задачи не закрывались; новый CI 503b ещё требуется.
+
+## 513: settlement seed, прогретые точки и открытый rich undo
+
+Локальные build/test/app прошли с 513 тестами без ошибок/пропусков в 17:14:03 МСК,
+`.build/settlement-seed-{build,tests,app}.log`. PID 58184, запуск 14:14:53Z,
+SHA `3711cb2ceb1d13f217ad5c71d85b6531cd24915a52bedde319dc93ce0afa51d4`,
+DEBUG unicodeChrome, `.build/acceptance-513-unicode-chrome.jsonl`.
+Review изменения seed замечаний не выявил; устранены повторы guards, но сохранены
+границы проверок, два readback через 20 мс, максимум четыре и cleanup.
+Default UnicodeOFF; своего CI 513 ещё нет, прежний green489 не переносится.
+
+Первый ENauto 256,523958 мс дал точное `привет ` с ASCII-пробелом, TISRU,
+но превысил 200 мс. Engine 209,087459 мс, current/identity/snapshot 60/20/9 вызовов.
+Повторный RUauto 199,574541 мс и receipt undo 155,491583 мс прошли; UI после undo
+подтвердил исходное `цщкдв ` и TISRU. Быстрое продолжение при повторном RUauto
+169,697958 мс дало точное `world hello ` с ASCII-пробелами.
+Это отдельные прогретые PASS, не вся cold/repeat приёмка.
+
+Rich ENauto 158,376083 мс прошёл и дал `привет`+NBSP, но immediate receipt undo
+145,555542 мс failed с `unicodeSnapshotUnverified` после selection, до Down.
+Остались `привет`+NBSP/TISRU; исходные `ghbdtn`+NBSP не вернулись. Это открытый
+обязательный дефект точного undo, не принятая полная rich-поддержка.
+Логи `.build/matrix-513-chrome-auto-{first-en,ru-undo,ru-continuation}-diagnostics.log`
+и `.build/matrix-513-chrome-rich-auto-en-undo{,-diagnostics}.log`.
+Пустой clipboard/count 3230/hash 338a3d… сохранён. Полные числа и hash — в
+[общем протоколе](../../../docs/acceptance-2026-10-15.md). Составные задачи не закрывались.
+
+Короткий tap-контроль 513 на 17:25:53 МСК: PID 58184, uptime 659,870 с,
+289 callback, два >1 мс, максимум 3,224292 мс, tapEnabled=true.
+`.build/acceptance-513-unicode-chrome.jsonl`; это не hot path PASS и не 8 часов.
+
+Последующая диагностическая 513b прошла build/test/app с 513 тестами без ошибок/пропусков
+в 17:31:17 МСК, `.build/snapshot-flags-{build,test,app}.log`. SHA
+`7f52d970e38630d83ded9806d2ffecc15503060f9ebe4e9cf92837b32f67c61f`, PID 60726,
+старт 14:31:53Z, `.build/acceptance-513b-unicode-chrome.jsonl`, DEBUG unicodeChrome.
+Первый id 1 попал в body/webarea без focused editor: providerVerified=false,
+editableRoot=false, documentRoot=true, отказ unicodeSnapshotUnverified, поле не изменено.
+Это setup-invalid, не cold rich performance FAIL/PASS; название логов
+`.build/matrix-513b-chrome-rich-auto-first-ru{,-diagnostics}.log` сохранено как история
+намеренного сценария. Затем приняты три отдельные rich-repeat пары 513b:
+
+| IDs | Auto, мс | Receipt undo, мс | CUA после undo |
+| --- | ---: | ---: | --- |
+| 5/6 | 178,866 | 256,652667 | `ghbdtn`+NBSP |
+| 7/8 | 180,817334 | 190,564125 | `ghbdtn`+NBSP |
+| 9/10 | 172,584625 | 242,473334 | `ctujlyz`+NBSP |
+
+В этих трассах snapshot_invalid не появился, каждая undo завершилась undone.
+Логи `.build/matrix-513b-chrome-rich-{en-undo-focused,en-undo-repeat,today-undo}{,-diagnostics}.log`.
+Прежний failed undo 513 не считается исправленным по трём удачным повторам;
+полный rich-профиль и cold gate открыты. После двух отмен CUA подтвердил обучение
+на собственном `ghbdtn`; удалено только это тестовое исключение, список снова пуст.
+Последний clipboard: items 0/count 3236/hash 338a3d… прежний пустой. Между опытами
+были фоновые пользовательские конверсии Codex (не acceptance), поэтому count
+за всю 513b неизменным не объявляется. Unicode-путь clipboard сам не использует.
+
+Перед checkpoint запущен normal513b без test-engine, PID62093/start14:45:49Z,
+`.build/acceptance-513b-normal.jsonl`, прежний SHA7f52d970… . CUA подтвердил перед
+restart autoOFF/enabledON/soundON/loginOFF/undo3с/learning2/empty personal exceptions.
+Punto/Caramba не запущены; LSwitch оставлен включённым. Аудитор87281 завершён
+exit0, originalemptyhash338a3d… matchestrue приcount3238; restore-write не нужен.
+Фоновые операции пользователя не позволяют утверждать постоянныйcount всей сессии.
+Проверкаcheckpoint не закрывает всю работу; нестабильныйrichundo исследуется дальше.

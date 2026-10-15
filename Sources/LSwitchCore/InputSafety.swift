@@ -9,6 +9,9 @@ public struct InputTarget {
     public let element: AXUIElement
     private let applicationPID: pid_t
 
+    /// Host берётся из того же захвата, что и AX-элемент; повторный frontmost lookup может сменить адресата.
+    var capturedApplicationPID: pid_t { applicationPID }
+
     fileprivate init(element: AXUIElement, applicationPID: pid_t) {
         self.element = element
         self.applicationPID = applicationPID
@@ -55,10 +58,7 @@ public enum InputSafety {
     }
 
     static func isProtected(_ element: AXUIElement) -> Bool {
-        if AXTextConverter.isSecureField(element) { return true }
-        var protected: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, "AXProtectedContent" as CFString, &protected) == .success,
-           let flag = protected as? Bool, flag { return true }
-        return false
+        // Predicate уже читает Subrole и ProtectedContent заново для этой границы.
+        AXTextConverter.isSecureField(element)
     }
 }

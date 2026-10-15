@@ -604,9 +604,73 @@ Confirm до паузы также проверяет только Task cancella
 полностью проверенный read(). Cleanup игнорирует отмену Task, но сохраняет собственные
 guards цели/документа. После settlement отдельный дублирующий matches исключается:
 единственная обязательная полная сверка непосредственно в packet.post перед Down
-остаётся. Между settlement и этой проверкой нет мутации/await. Состояние или разрешение
-не кэшируется между паузами; live provider проверки и прежний общий SelectionSettlement
+остаётся. Между settlement и этой проверкой нет мутации/await. Старое состояние или разрешение
+не подменяет новое чтение после паузы; live provider проверки и прежний общий SelectionSettlement
 остаются без изменений. Повторное измерение проверяет эффект, цель 200 мс не ослабляется.
+
+Следующее измерение 489 дало 149 isCurrent, 42 documentIdentity, 10 snapshot,
+engine 253,895 мс и end-to-end 291,461 мс: цель по-прежнему не пройдена. Следующий
+согласованный шаг — UnicodeReadBoundary с инкапсулированными raw getters адаптера.
+Raw identity делает только bounded root read, raw snapshot сохраняет все прежние
+provider/value/range/count/AXStringForRange/selectedText проверки без повторных
+identity walks. Вызвать эти getters может только boundary. Сам raw snapshot получает
+из boundary свежий permission callback: после metadata IPC непосредственно перед
+AXValue и после text/selection перед coordinate/selectedText чтениями он повторно
+проверяет текущую цель и защищённость. Postguard не заменяет запрет чтения payload,
+если metadata IPC уже изменил фокус или protected/Secure Input состояние.
+Initial capture и каждый checked identity guard выполняют isCurrent до и после
+raw identity; полный guard сохраняется также в receipt. Проверка исходного запроса
+(lease/revision/контекст) выполняется после identity read, чтобы инвалидация внутри
+него не использовала ранее полученное разрешение. Затем повторяются Task/source guards.
+Prepare и transaction используют один read API с полной проверкой до и после raw
+snapshot; значение не принимается до after guard. Cleanup сохраняет checked identity
+и canCleanup, но не наследует Task cancellation или истечение mutation lease.
+Повторный context.isValid снаружи уже scoped request удаляется. Текущие state и разрешение
+подтверждаются заново после await; last pre-Down, before/after selection, inverse preflight,
+code policy, exact UTF-16 и 20 мс / 2 stable / max4 сохраняются. Batching AX attributes
+в этот шаг не входит; его возможный будущий результат нельзя считать атомарным.
+
+Host PID для Unicode capture берётся из самого InputTarget, захваченного при
+первой проверке фокуса. Bundle/version читаются через NSRunningApplication этого PID,
+без повторного frontmost lookup: ABA смена двух процессов не должна связать AX-цель
+одного с получателем Unicode другого. AX owner PID не приравнивается к host PID,
+поскольку AX-элемент может принадлежать WebContent-процессу.
+
+После 503b (261,394 мс в первом фактическом EN→RU auto, цель не пройдена) устраняются
+две лишние проверки стабильности, а не интервал между наблюдениями. Unicode settlement
+может принять первый полностью проверенный snapshot: helper сам проверяет isComplete,
+точный UTF-16 текст и конечный диапазон. Только такой snapshot даёт initial matching=1
+и занимает одну из четырёх проверок; остаются максимум три новых чтения. Nil, partial,
+исходная каретка или неполный snapshot не засчитываются, сохраняется прежний максимум
+четыре новых чтения. При частичном допустимом диапазоне consecutive matching сбрасывается.
+Успех по одному seed запрещён: обязательны pause 20 мс и следующий fresh boundary.read
+со всеми guards. Seed — историческое наблюдение, не разрешение или ACK доставки.
+
+Первое наблюдение берётся только из confirm после exact resultingText+collapsed caret
+либо из последнего after-callback своего selection batch с exact target range.
+Каждый callback сначала очищает ранее сохранённый seed; использовать его можно только
+после успешного sendSelection. Отсутствующий callback и partial дают старый unseeded
+путь. Existing selection, collapse и cleanup в этом шаге не получают seed; ordered
+EOF cancellation и проверка seventh-yield не меняются. Last pre-Down whole-text/range
+check обязателен независимо от результата settlement. Контекст, source, lease, protected
+состояние и документ повторно проверяются после паузы, даже если seed был правильным.
+
+InputSafety.isProtected также перестаёт повторно читать AXProtectedContent сразу
+после SystemAXTextAccess.isSecureField, который уже прочитал Subrole и ProtectedContent.
+Каждая существующая permission boundary по-прежнему получает свежее наблюдение обоих
+атрибутов; metadata→payload, post-text, after-await, cleanup и last-Down guards сохраняются.
+Это не атомарная проверка и не race-equivalent преобразование: прежний дополнительный
+read мог увидеть false→true в своём узком временном окне. Один свежий predicate на
+каждой границе остаётся контрактом; разрешение не кэшируется между границами.
+
+На 513 rich auto прошёл за 158,376 мс, но immediate receipt undo отказал после
+native selection с unicodeSnapshotUnverified до Down. Для локализации добавляется
+только DEBUG первая invalid-snapshot строка на Context: provider/provenance,
+countMatches, coordinatesMatch, selectedTextMatches, editable/document root и value
+budget. Значения выводятся из уже полученных данных; непрочитанные проверки имеют
+фиксированную метку notRead. Новых AX-запросов, текста, диапазонов, символов или
+clipboard metadata нет. Все guards и отказ остаются прежними, повторной мутации
+нет. Ни временная задержка AX, ни нормализация NBSP не считаются доказанной причиной.
 
 ### D12. Обратимость native-замены проверяется до первой мутации
 
@@ -646,6 +710,39 @@ Default native-профиль Chrome без полного исходного AX
 разрезающая grapheme/UTF-16, отклоняются до захвата clipboard. Моки подтверждают
 нулевые мутации и сохранение текущего текста/выделения; живая матрица остаётся
 отдельным обязательным шагом, цель 200 мс и бюджет hold не меняются.
+
+### D13. VS Code: безопасный отказ до подтверждения модели редактора
+
+Обычная сборка 489 в VS Code сначала выполнила ручное EN→RU и точный undo,
+но обратный сценарий RU→EN получил `textNotConfirmed` за 342,762 мс: вместо
+замены `привет` появилось `приветghbdtn`. AX-выделение не соответствовало selection
+реальной модели, Paste добавила текст. Следующий undo отказал по expected span.
+Clipboard остался прежним; это не делает повреждение текста безопасным результатом.
+Протокол: `.build/matrix-489-normal-vscode-reverse-undo-diagnostics.log`.
+
+До отдельного доказательства модели exact bundle `com.microsoft.VSCode` получает
+явный default-отказ `unverifiedEditorModel` до текстового AX-снимка, capture clipboard,
+выделения, подготовки меню и клавиш. AppRules и пользовательский blacklist не меняются.
+Default-маршрут выбирает guarded clipboard-профиль без предшествующей AX-попытки;
+обычный public ClipboardConverter также использует этот guard. Ни native Shift+Left,
+ни Unicode packet сами по себе не являются исправлением: EOF виртуализированного
+AX-фрагмента не доказывает EOF полного документа, а cleanup не принят.
+Остальные Electron-приложения не блокируются по этому единичному наблюдению.
+
+Системная фабрика проверяет профиль до захвата AX-цели и связывает разрешённую
+цель с PID исходного приложения; смена приложения во время захвата не должна
+разрешить запрещённый профиль. Отказ содержит только категорию, без текста документа.
+Отдельный DEBUG keyboard/forceCopy acceptance-режим допустим лишь с явным
+test-app-bundle, совпадающим с текущим приложением, и не меняет default. Передача
+одного keyboardOnly без scoped target не снимает отказ. Это исследовательский
+override, не поддержка VS Code и не успешная приёмка 3.3.
+
+Для будущей поддержки нужен отдельный доверенный bridge к публичному API VS Code,
+который подтверждает active document/version/selection и выполняет условную замену
+в модели, связывая её с фокусом конкретного окна. Exact receipt undo должен повторно
+проверять версию/диапазон и принадлежность документа; parser/comment policy не может
+полагаться на виртуальный AX-фрагмент. До реализации и двусторонней живой приёмки
+VS Code остаётся `known-unsupported-editor`; исходная задача 3.3 не закрывается.
 
 ## Risks / Trade-offs
 

@@ -9,13 +9,16 @@ extension UnicodeEnvironment {
         UnicodeEnvironment(
             captureContext: {
                 guard let target = InputSafety.captureTarget(),
-                      let application = NSWorkspace.shared.frontmostApplication else { return nil }
+                      let application = NSRunningApplication(processIdentifier: target.capturedApplicationPID) else {
+                    return nil
+                }
                 let version = application.bundleURL.flatMap { Bundle(url: $0) }?
                     .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
                 let live = UnicodeLiveContext(target: target, application: application, version: version)
-                return Context(processID: application.processIdentifier, isValid: { live.isCurrent() },
-                               snapshot: { live.snapshot() }, automaticContext: { live.automaticContext() },
-                               documentIdentity: { live.documentIdentity() })
+                return Context(processID: target.capturedApplicationPID, isCurrent: { live.isCurrent() },
+                               rawSnapshot: { live.rawSnapshot(canReadText: $0) },
+                               automaticContext: { live.automaticContext() },
+                               rawDocumentIdentity: { live.rawDocumentIdentity() })
             }, activeSource: { UnicodeInputSource.current() }, canPost: { CGPreflightPostEventAccess() },
             prepare: { UnicodeEventEmitter.prepare($0, targetPID: $1) },
             sendSelection: { command, processID, before, after in
@@ -40,6 +43,9 @@ private final class UnicodeLiveContext {
     private let webArea: AXUIElement?
     private let identity = UUID().uuidString
     private var didLogMetadata = false
+    #if DEBUG
+    private var didLogInvalidSnapshot = false
+    #endif
     private static let logger = Logger(subsystem: "LSwitch", category: "UnicodeSnapshot")
 
     init(target: InputTarget, application: NSRunningApplication, version: String?) {
@@ -60,7 +66,7 @@ private final class UnicodeLiveContext {
         #endif
     }
 
-    func documentIdentity() -> String? {
+    func rawDocumentIdentity() -> String? {
         #if DEBUG
         return UnicodePerformance.measure(.documentIdentity) { readDocumentIdentity() }
         #else
@@ -69,10 +75,8 @@ private final class UnicodeLiveContext {
     }
 
     private func readDocumentIdentity() -> String? {
-        guard isCurrent() else { return nil }
         if let webArea {
-            guard let current = Self.webAreaAncestor(of: target.element), CFEqual(current, webArea),
-                  isCurrent() else { return nil }
+            guard let current = Self.webAreaAncestor(of: target.element), CFEqual(current, webArea) else { return nil }
         }
         // Неизвестный provider получит unverified snapshot, но не прочтёт его текст.
         return identity
@@ -84,16 +88,15 @@ private final class UnicodeLiveContext {
         return isCurrent() ? context : .unknown
     }
 
-    func snapshot() -> UnicodeTextSnapshot? {
+    func rawSnapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
         #if DEBUG
-        return UnicodePerformance.measure(.snapshot) { readSnapshot() }
+        return UnicodePerformance.measure(.snapshot) { readSnapshot(canReadText: canReadText) }
         #else
-        return readSnapshot()
+        return readSnapshot(canReadText: canReadText)
         #endif
     }
 
-    private func readSnapshot() -> UnicodeTextSnapshot? {
-        guard documentIdentity() != nil else { return nil }
+    private func readSnapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
         let role = Self.attribute(kAXRoleAttribute, in: target.element) as? String
         let nearest = Self.elementAttribute("AXEditableAncestor", in: target.element)
         let highest = Self.elementAttribute("AXHighestEditableAncestor", in: target.element)
@@ -104,15 +107,26 @@ private final class UnicodeLiveContext {
         )
         guard provider else {
             logMetadata(role: role, root: editableRoot, count: false, coordinates: false, bounded: false)
+            #if DEBUG
+            if !didLogInvalidSnapshot {
+                didLogInvalidSnapshot = true
+                let flags = "snapshot_invalid providerVerified=false countMatches=notRead"
+                    + " coordinatesMatch=notRead selectedTextMatches=notRead provenanceVerified=false"
+                    + " editableRoot=\(editableRoot) documentRoot=\(webArea != nil) withinValueBudget=notRead"
+                Self.logger.notice("\(flags, privacy: .public)")
+            }
+            #endif
             return unverifiedSnapshot()
         }
-        return readSnapshot(role: role, editableRoot: editableRoot)
+        return readSnapshot(role: role, editableRoot: editableRoot, canReadText: canReadText)
     }
 
-    private func readSnapshot(role: String?, editableRoot: Bool) -> UnicodeTextSnapshot? {
+    private func readSnapshot(
+        role: String?, editableRoot: Bool, canReadText: UnicodeEnvironment.Context.TextReadPermission
+    ) -> UnicodeTextSnapshot? {
         let access = SystemAXTextAccess()
-        guard isCurrent(), let text = access.text(in: target.element),
-              let selection = access.selection(in: target.element), isCurrent() else { return nil }
+        guard canReadText(), let text = access.text(in: target.element),
+              let selection = access.selection(in: target.element), canReadText() else { return nil }
         let count = Self.attribute(kAXNumberOfCharactersAttribute, in: target.element) as? Int
         let bounded = UnicodeSnapshotPolicy.permitsValue(text)
         let coordinates = bounded ? Self.stringForRange(
@@ -122,10 +136,22 @@ private final class UnicodeLiveContext {
         let selectionMatches = selectedTextMatches(text: text, selection: selection)
         logMetadata(role: role, root: editableRoot, count: count != nil,
                     coordinates: matchingCoordinates, bounded: bounded)
-        guard documentIdentity() != nil else { return nil }
-        return UnicodeTextSnapshot(text: text, selection: selection, characterCount: count,
-                                   coordinateText: coordinates,
-                                   provenance: selectionMatches ? .chromiumTextControl : .unverified)
+        let snapshot = UnicodeTextSnapshot(text: text, selection: selection, characterCount: count,
+                                           coordinateText: coordinates,
+                                           provenance: selectionMatches ? .chromiumTextControl : .unverified)
+        #if DEBUG
+        if !didLogInvalidSnapshot, !snapshot.isComplete {
+            didLogInvalidSnapshot = true
+            let countMatches = count == text.utf16.count
+            let provenanceVerified = snapshot.provenance == .chromiumTextControl
+            let flags = "snapshot_invalid providerVerified=true countMatches=\(countMatches)"
+                + " coordinatesMatch=\(matchingCoordinates) selectedTextMatches=\(selectionMatches)"
+                + " provenanceVerified=\(provenanceVerified) editableRoot=\(editableRoot)"
+                + " documentRoot=\(webArea != nil) withinValueBudget=\(bounded)"
+            Self.logger.notice("\(flags, privacy: .public)")
+        }
+        #endif
+        return snapshot
     }
 
     private func selectedTextMatches(text: String, selection: NSRange) -> Bool {

@@ -3,7 +3,7 @@ import Foundation
 
 /// Профили приложений: детект тех, у кого AX-запись заведомо сломана.
 ///
-/// Electron-обёртки (Obsidian, VS Code, Slack, Discord и др.) отвечают
+/// Некоторые Electron-обёртки отвечают
 /// на `AXUIElementSetAttributeValue` успехом, но вставляют текст у курсора
 /// вместо замены диапазона (находка спайка P0.2, Obsidian). Для них
 /// AX-попытка портит текст — сразу clipboard-режим. Детект по наличию
@@ -16,6 +16,8 @@ public final class AppProfiles {
     public init() {}
 
     public func prefersClipboard(bundleID: String) -> Bool {
+        // Неподтверждённая модель направляется к отказу clipboard guard до попытки AX-записи.
+        if Self.clipboardRejection(bundleID: bundleID) != nil { return true }
         // WebKit может сообщить успех AX-записи без замены, оставив DOM-выделение
         // несогласованным с AX. Для Safari используем нативный Copy/Paste сразу.
         if bundleID == "com.apple.Safari" || bundleID == "com.google.Chrome" { return true }
@@ -33,6 +35,11 @@ public final class AppProfiles {
     /// Транспорт выбирается до мутации; AX остаётся источником проверяемого снимка.
     static func prefersKeyboardSelection(bundleID: String?) -> Bool {
         bundleID == "com.google.Chrome"
+    }
+
+    /// VS Code подтвердил AX-выделение, но Paste дописала результат рядом с исходником.
+    static func clipboardRejection(bundleID: String?) -> ConversionDiagnostics.Rejection? {
+        bundleID == "com.microsoft.VSCode" ? .unverifiedEditorModel : nil
     }
 
     private func detectElectron(bundleID: String) -> Bool {
