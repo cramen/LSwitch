@@ -855,3 +855,85 @@ count 3238, SHA-256 `338a3d986bbcbc43f2a3206a429aaa307429eeded38ff142415fe9538fa
    с FP в коде не переписывается под новый runtime guard.
 4. **Завершение:** общий build/test, строгий CI нового кода, финальная сверка
    README/TZ/OpenSpec. Архивировать только change с полностью принятыми задачами.
+
+## Продолжение без расширения: общий контракт восстановления ввода
+
+По решению пользователя браузерное расширение не используется. Исследование и
+исправление общего P1 ведутся в `fix-input-recovery`; установка расширения, вход
+в аккаунт Google и выдача новых Automation-разрешений для этого не требуются.
+
+Контрпример воспроизведён и для production clipboard, отдельно с native и AX
+selection: после собственного выделения `readState` постоянно отсутствует,
+Paste не отправлен, clipboard восстановлен, но прежний `hold → release` оставляет
+выделение для следующего ввода. Данные `.build/research-incoherence/production-results.json`
+получены через тестовые адаптеры с реальным скомпилированным Core 513b, без системного
+ввода и доступа к пользовательскому clipboard. Это модельный дефект, не заявление
+о новой порче пользовательского документа.
+
+Первый независимый этап 20:14:23 МСК: `make build` и `make test`, **545 тестов,
+0 ошибок**. Добавлены 19 тестов журнала собственной отправки/владения, 4 проверки
+сохранения журнала в target/document/Unicode wrappers и 9 тестов detach/claim.
+Отдельно проверяются отрицательный ответ setter после попытки, pending Copy,
+поздний callback, пустая очередь с опасным выделением, конкурирующие потребители,
+копии CGEvent, завершение старого поколения и жизнь batch после удаления buffer.
+Логи: `.build/input-recovery-foundation-{build,test}.log`.
+
+Состояние каретки и право доставить очередь разделены: успешный readback не закрывает
+предыдущую pending-команду, а одноразовый claim не утверждает обработку получателем.
+Эти результаты закрывают чистые контракты 1.1–1.2; до интеграции они не исправляют
+действующий Converter/EventTapCore. Задача 3.1 остаётся открытой. Новая `.app` на этом
+этапе не собиралась: SHA ранее запущенной 513b остаётся
+`7f52d970e38630d83ded9806d2ffecc15503060f9ebe4e9cf92837b32f67c61f`.
+
+Изолированный own-PID probe после создания NSApplication при policy prohibited,
+без активного приложения и окон, проверил порядок двух собственных keyUp:
+head увидел original, proxy внедрил injected, tail получил `[injected, original]`.
+Только preflight существующих разрешений; запросов TCC, AX, clipboard, чужого PID
+или активации не было. Это подтверждение admission order в данной конфигурации,
+**не renderer ACK и не приёмка quarantine**. Локатор:
+`.build/recovery-tap-probe-appkit-idempotent-result.json`. Условия порядка соответствуют
+[описанию CGEvent.tapPostEvent](https://developer.apple.com/documentation/coregraphics/cgevent/tappostevent(_:)).
+
+Следующий own-PID probe подтвердил ограниченный приём уже в очереди
+`NSApplication.nextEvent`: baseline и control нового поколения дошли до head,
+tail и AppKit; отправленный перед закрытием поколения late keyUp был отклонён
+в head и не наблюдался дальше. Результат `gate_block_and_appkit_queue_observed`,
+268 мс, оба tap удалены; active=false, windows=0. Локаторы:
+`.build/recovery-receiver-probe.swift`, `.build/recovery-receiver-probe-result.json`.
+Проверены только три собственных keyUp и ограниченное окно наблюдения. Редактор,
+текстовые пакеты, глобальные shortcuts и внешний процесс не участвовали;
+`editorRendererAcknowledged=false`, `recoveryGateAccepted=false` сохраняются явно.
+
+Отдельный disable/re-enable probe подтвердил ограничение: закрытое поколение
+блокировалось при включённом head tap, но собственный stale keyUp дошёл до tail и
+AppKit при его выключении. После re-enable следующий stale keyUp снова блокировался;
+новый control проходил. Пять keyUp собственного PID, 223 мс, head состояния
+`[true,false,true]`, одно уведомление отключения, оба tap очищены, active=false/windows=0.
+Локаторы `.build/recovery-receiver-disable-probe{.swift,-result.json}`;
+source SHA-256 `33e999940a4ba9d493129521e9e7283ddb030dba213754e5b7810cfde50161ed`.
+Это наблюдение **fail-open**, `safetyPassed=false`; автоматическое восстановление,
+TCC и защита текста не проверялись. Одного удаления/пересоздания tap недостаточно,
+чтобы считать старые отправки отменёнными. Это ограничение включено в lifecycle-план.
+
+Приёмка ещё требует реального получателя и отказов, включая поздний пакет, OFF,
+потерю tap/прав, focus, modifiers и mouse. Предложенный аварийный режим, в котором
+уже удержанные события сохраняются, а новые нажатия в проблемном приложении видимо
+отклоняются, ожидает отдельного выбора пользователя. Это не объявляется сохранением
+каждого будущего нажатия. Рабочий системный путь до принятия режима не включается.
+
+Финальный локальный checkpoint 20:46:46 МСК: **567 тестов, 0 ошибок**, сборка прошла,
+OpenSpec strict 6/6. После первой проверки добавлены идентичность buffer в hold-token,
+revision cleanup и opt-in AX-адаптер: подготовка значения без RPC, журнал перед
+setter, исходный AXError и отдельный bound receiver contract. Тринадцать AX-регрессий
+проверяют healthy inverse, late/error setter, постоянно отсутствующий readback,
+канонически эквивалентный чужой UTF-16, cancellation и вложенный callback финального
+чтения. Последний review-blocker — повторное повышение отвергнутого cleanup из
+общего ledger — исправлен и покрыт двумя дополнительными тестами; повторный review CLEAN.
+Логи `.build/input-recovery-final-{build,test}.log`.
+
+Системный receiver contract пока не принят. При наличии ledger и отсутствии bound
+contract AX отказывает до подготовки записи. Действующий runtime не создаёт ledger
+и сохраняет прежний режим. Clipboard/Unicode integration, EventTapCore lifecycle,
+recovery UI и живая приёмка ещё впереди. `fix-input-recovery` — 2/14, не архивирован;
+новая `.app` не устанавливалась. Работающий PID 62093 подтверждён, Punto/Caramba
+не запущены. Зелёные модельные тесты не объявляются исправлением P1 в работающей 513b.

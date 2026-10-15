@@ -28,6 +28,7 @@ extension ConversionRequest {
         return ConversionRequest(
             expectedWord: expectedWord, trailingText: trailingText, replacement: replacement,
             sourceLayout: sourceLayout, useSelection: useSelection, diagnostics: diagnostics,
+            safetyLedger: safetyLedger,
             beginMutation: beginMutation,
             canCleanup: { canCleanup() && read() == expected },
             isValid: {

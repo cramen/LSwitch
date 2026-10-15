@@ -156,4 +156,133 @@ final class InputEventBufferTests: XCTestCase {
         XCTAssertNotNil(buffer.begin(at: 2))
         XCTAssertNil(buffer.begin(at: 3))
     }
+
+    func testDetachPreservesOrderAndPreventsLegacyEndReplay() throws {
+        let buffer = InputEventBuffer()
+        let token = try XCTUnwrap(buffer.beginHold(at: 0))
+        let types: [CGEventType] = [.flagsChanged, .keyDown, .keyUp, .leftMouseDown, .leftMouseUp]
+        for (index, type) in types.enumerated() {
+            let input = try event(type, timestamp: UInt64(index + 1), marker: Int64(index + 40))
+            XCTAssertTrue(buffer.intercept(type: type, event: input, at: 20))
+        }
+        let batch = try XCTUnwrap(buffer.detach(token: token))
+        XCTAssertEqual(batch.token, token)
+        XCTAssertEqual(batch.generation, token.generation)
+        XCTAssertEqual(batch.eventCount, types.count)
+        XCTAssertFalse(buffer.isActive)
+        XCTAssertFalse(buffer.isHolding)
+        XCTAssertNil(buffer.detach(token: token))
+        buffer.end { _ in XCTFail("Переданные события не должны попасть в legacy end") }
+        XCTAssertFalse(buffer.intercept(type: .keyDown, event: try event(), at: 21))
+        let claimed = try XCTUnwrap(batch.claim())
+        XCTAssertEqual(claimed.map(\.type), types)
+        XCTAssertEqual(claimed.map(\.timestamp), [1, 2, 3, 4, 5])
+        XCTAssertEqual(claimed.map { $0.getIntegerValueField(.eventSourceUserData) }, [40, 41, 42, 43, 44])
+        XCTAssertNil(batch.claim())
+    }
+
+    func testDetachKeepsIndependentCopiesOfRepeatedInputObject() throws {
+        let buffer = InputEventBuffer()
+        let token = try XCTUnwrap(buffer.beginHold(at: 0))
+        let input = try event(key: 13, marker: 42)
+        XCTAssertTrue(buffer.intercept(type: .keyDown, event: input, at: 1))
+        XCTAssertTrue(buffer.intercept(type: .keyDown, event: input, at: 2))
+        input.setIntegerValueField(.keyboardEventKeycode, value: 12)
+        let batch = try XCTUnwrap(buffer.detach(token: token))
+        input.setIntegerValueField(.eventSourceUserData, value: 43)
+        let claimed = try XCTUnwrap(batch.claim())
+        XCTAssertEqual(claimed.count, 2)
+        guard claimed.count == 2 else { return }
+        XCTAssertEqual(claimed[0].getIntegerValueField(.keyboardEventKeycode), 13)
+        XCTAssertEqual(claimed[0].getIntegerValueField(.eventSourceUserData), 42)
+        claimed[0].setIntegerValueField(.keyboardEventKeycode, value: 9)
+        XCTAssertEqual(claimed[1].getIntegerValueField(.keyboardEventKeycode), 13)
+        XCTAssertEqual(input.getIntegerValueField(.keyboardEventKeycode), 12)
+    }
+
+    func testStaleDetachAndTimerCannotTakeOrExpireNextGeneration() throws {
+        let buffer = InputEventBuffer()
+        let first = try XCTUnwrap(buffer.beginHold(at: 0))
+        XCTAssertTrue(buffer.intercept(type: .keyDown, event: try event(marker: 41), at: 1))
+        let firstBatch = try XCTUnwrap(buffer.detach(token: first))
+        let second = try XCTUnwrap(buffer.beginHold(at: 20))
+        XCTAssertNotEqual(first, second)
+        XCTAssertTrue(buffer.intercept(type: .keyUp, event: try event(.keyUp, marker: 42), at: 21))
+        buffer.expire(generation: first.generation, at: InputEventBuffer.maximumDuration + 20)
+        XCTAssertNil(buffer.detach(token: first))
+        XCTAssertTrue(buffer.isHolding)
+        let secondBatch = try XCTUnwrap(buffer.detach(token: second))
+        XCTAssertEqual(try XCTUnwrap(firstBatch.claim()).map(\.type), [.keyDown])
+        XCTAssertEqual(try XCTUnwrap(secondBatch.claim()).map(\.type), [.keyUp])
+        XCTAssertNil(buffer.detach(token: second))
+    }
+
+    func testLateScopedEndCannotReleaseNewHold() throws {
+        let buffer = InputEventBuffer()
+        let first = try XCTUnwrap(buffer.beginHold(at: 0))
+        let detached = try XCTUnwrap(buffer.detach(token: first))
+        let second = try XCTUnwrap(buffer.beginHold(at: 20))
+        XCTAssertTrue(buffer.intercept(type: .keyDown, event: try event(marker: 42), at: 21))
+        XCTAssertFalse(buffer.end(token: first) { _ in XCTFail("Старый end не владеет новой очередью") })
+        XCTAssertTrue(buffer.isHolding)
+        var delivered: [CGEventType] = []
+        XCTAssertTrue(buffer.end(token: second) { delivered.append($0.type) })
+        XCTAssertEqual(delivered, [.keyDown])
+        XCTAssertFalse(buffer.isActive)
+        XCTAssertFalse(buffer.end(token: second) { _ in XCTFail("Поколение уже завершено") })
+        XCTAssertTrue(try XCTUnwrap(detached.claim()).isEmpty)
+    }
+}
+
+extension InputEventBufferTests {
+    func testForeignTokenCannotDetachReleaseOrExpireEqualGeneration() throws {
+        let first = InputEventBuffer()
+        let second = InputEventBuffer()
+        let firstToken = try XCTUnwrap(first.beginHold(at: 0))
+        let secondToken = try XCTUnwrap(second.beginHold(at: 0))
+        XCTAssertEqual(firstToken.generation, secondToken.generation)
+        XCTAssertNotEqual(firstToken, secondToken)
+        XCTAssertTrue(first.intercept(type: .keyDown, event: try event(marker: 41), at: 1))
+        XCTAssertTrue(second.intercept(type: .keyUp, event: try event(.keyUp, marker: 42), at: 1))
+
+        XCTAssertNil(first.detach(token: secondToken))
+        XCTAssertFalse(first.end(token: secondToken) { _ in XCTFail("Чужой token не разрешает доставку") })
+        first.expire(token: secondToken, at: InputEventBuffer.maximumDuration)
+        XCTAssertTrue(first.isHolding)
+        XCTAssertNil(second.detach(token: firstToken))
+        XCTAssertFalse(second.end(token: firstToken) { _ in XCTFail("Чужой token не владеет второй очередью") })
+        XCTAssertTrue(second.isHolding)
+
+        let batch = try XCTUnwrap(first.detach(token: firstToken))
+        XCTAssertEqual(batch.token, firstToken)
+        XCTAssertEqual(try XCTUnwrap(batch.claim()).map(\.type), [.keyDown])
+        var delivered: [CGEventType] = []
+        XCTAssertTrue(second.end(token: secondToken) { delivered.append($0.type) })
+        XCTAssertEqual(delivered, [.keyUp])
+        XCTAssertNil(first.detach(token: firstToken))
+        XCTAssertFalse(second.end(token: secondToken) { _ in XCTFail("Повторная доставка запрещена") })
+    }
+
+    func testStaleTokenCannotTakeReleaseOrExpireNextHold() throws {
+        let buffer = InputEventBuffer()
+        let old = try XCTUnwrap(buffer.beginHold(at: 0))
+        XCTAssertNil(buffer.beginHold(at: 1))
+        XCTAssertNil(buffer.begin(at: 1))
+        let empty = try XCTUnwrap(buffer.detach(token: old))
+        let current = try XCTUnwrap(buffer.beginHold(at: 20))
+        XCTAssertNotEqual(old.generation, current.generation)
+        XCTAssertTrue(buffer.intercept(type: .keyDown, event: try event(), at: 21))
+        XCTAssertNil(buffer.detach(token: old))
+        XCTAssertFalse(buffer.end(token: old) { _ in XCTFail("Старый token не выпускает новый hold") })
+        buffer.expire(token: old, at: InputEventBuffer.maximumDuration + 20)
+        XCTAssertTrue(buffer.isHolding)
+        buffer.expire(token: current, at: InputEventBuffer.maximumDuration + 20)
+        XCTAssertFalse(buffer.isHolding)
+        let batch = try XCTUnwrap(buffer.detach(token: current))
+        XCTAssertEqual(batch.token, current)
+        XCTAssertEqual(try XCTUnwrap(batch.claim()).map(\.type), [.keyDown])
+        XCTAssertEqual(empty.token, old)
+        XCTAssertTrue(try XCTUnwrap(empty.claim()).isEmpty)
+        XCTAssertNil(buffer.detach(token: current))
+    }
 }

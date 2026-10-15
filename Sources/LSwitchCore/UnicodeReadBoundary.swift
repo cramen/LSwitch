@@ -91,6 +91,7 @@ struct UnicodeReadBoundary {
             expectedWord: original.expectedWord, trailingText: original.trailingText,
             replacement: original.replacement, sourceLayout: original.sourceLayout,
             useSelection: original.useSelection, diagnostics: original.diagnostics,
+            safetyLedger: original.safetyLedger,
             beginMutation: original.beginMutation,
             canCleanup: { target() && original.canCleanup() },
             isValid: {

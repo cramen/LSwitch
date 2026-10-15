@@ -13,6 +13,8 @@ protocol AXTextAccess {
     func canSetSelection(in element: AXUIElement) -> Bool
     func replaceSelectedText(_ text: String, in element: AXUIElement) -> Bool
     func setSelection(_ range: NSRange, in element: AXUIElement) -> Bool
+    func prepareSelection(_ range: NSRange, in element: AXUIElement) -> AXPreparedWrite?
+    func prepareReplacement(_ text: String, in element: AXUIElement) -> AXPreparedWrite?
     func waitForUpdate() async
     func automaticContext(in element: AXUIElement) -> AutomaticTextContext
     func documentIdentity(in element: AXUIElement) -> String?
@@ -21,6 +23,8 @@ protocol AXTextAccess {
 extension AXTextAccess {
     func automaticContext(in element: AXUIElement) -> AutomaticTextContext { .prose }
     func documentIdentity(in element: AXUIElement) -> String? { nil }
+    func prepareSelection(_ range: NSRange, in element: AXUIElement) -> AXPreparedWrite? { nil }
+    func prepareReplacement(_ text: String, in element: AXUIElement) -> AXPreparedWrite? { nil }
 }
 
 @MainActor
@@ -71,17 +75,28 @@ struct SystemAXTextAccess: AXTextAccess {
     }
 
     func replaceSelectedText(_ text: String, in element: AXUIElement) -> Bool {
-        Self.limitMessaging(element)
-        return AXUIElementSetAttributeValue(
-            element, kAXSelectedTextAttribute as CFString, text as CFTypeRef
-        ) == .success
+        prepareReplacement(text, in: element)?.submitUntracked() == .success
     }
 
     func setSelection(_ range: NSRange, in element: AXUIElement) -> Bool {
-        Self.limitMessaging(element)
+        prepareSelection(range, in: element)?.submitUntracked() == .success
+    }
+
+    func prepareReplacement(_ text: String, in element: AXUIElement) -> AXPreparedWrite? {
+        let value = text as CFString
+        return AXPreparedWrite { _ in
+            Self.limitMessaging(element)
+            return AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, value)
+        }
+    }
+
+    func prepareSelection(_ range: NSRange, in element: AXUIElement) -> AXPreparedWrite? {
         var value = CFRange(location: range.location, length: range.length)
-        guard let axValue = AXValueCreate(.cfRange, &value) else { return false }
-        return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axValue) == .success
+        guard let axValue = AXValueCreate(.cfRange, &value) else { return nil }
+        return AXPreparedWrite { _ in
+            Self.limitMessaging(element)
+            return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axValue)
+        }
     }
 
     func documentIdentity(in element: AXUIElement) -> String? {

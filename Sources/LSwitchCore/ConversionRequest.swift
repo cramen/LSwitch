@@ -8,6 +8,8 @@ public struct ConversionRequest: Sendable {
     public let sourceLayout: Layout?
     public let useSelection: Bool
     public let diagnostics: ConversionDiagnostics?
+    /// Общий журнал операции не должен теряться при добавлении проверок контекста.
+    public let safetyLedger: ConversionSafetyLedger?
     public let beginMutation: @MainActor @Sendable () -> Bool
     public let canCleanup: @MainActor @Sendable () -> Bool
     public let isValid: @MainActor @Sendable () -> Bool
@@ -19,6 +21,7 @@ public struct ConversionRequest: Sendable {
         sourceLayout: Layout? = nil,
         useSelection: Bool = true,
         diagnostics: ConversionDiagnostics? = nil,
+        safetyLedger: ConversionSafetyLedger? = nil,
         beginMutation: @escaping @MainActor @Sendable () -> Bool = { true },
         canCleanup: (@MainActor @Sendable () -> Bool)? = nil,
         isValid: @escaping @MainActor @Sendable () -> Bool = { true }
@@ -29,6 +32,7 @@ public struct ConversionRequest: Sendable {
         self.sourceLayout = sourceLayout
         self.useSelection = useSelection
         self.diagnostics = diagnostics
+        self.safetyLedger = safetyLedger
         self.beginMutation = beginMutation
         self.canCleanup = canCleanup ?? isValid
         self.isValid = isValid
