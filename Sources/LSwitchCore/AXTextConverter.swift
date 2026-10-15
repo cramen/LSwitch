@@ -171,24 +171,30 @@ public final class AXTextConverter: ConversionEngine {
             return (logged(.unavailable, reason: "attributes-not-settable"), plan.wasSelection)
         }
         let result = await replace(plan, in: element, request: request, mutation: mutation)
-        if mutation.attempted {
-            switch result {
-            case .success:
-                mutation.recordCleanup(.recoveredObserved) {
-                    self.isCurrent(element, request: request)
-                        && mutation.textMatches(self.access.text(in: element), plan.resultingText)
-                        && self.access.selection(in: element) == plan.finalSelection
-                        && self.isCurrent(element, request: request)
-                }
-            default:
-                let evidence = await cleanup(plan, in: element, request: request, mutation: mutation)
-                if evidence != .recoveredObserved { mutation.recordCleanup(evidence, validateFresh: { false }) }
-            }
-        }
+        await recordFinalCleanup(result, plan: plan, in: element, request: request, mutation: mutation)
         if case .success(let receipt) = result {
             return (.success(receipt.checkingTarget(targetCheck)), plan.wasSelection)
         }
         return (result, plan.wasSelection)
+    }
+
+    private func recordFinalCleanup(
+        _ result: ConversionResult, plan: AXReplacementPlan, in element: AXUIElement,
+        request: ConversionRequest, mutation: AXMutationSafety
+    ) async {
+        guard mutation.attempted else { return }
+        switch result {
+        case .success:
+            mutation.recordCleanup(.recoveredObserved) {
+                self.isCurrent(element, request: request)
+                    && mutation.textMatches(self.access.text(in: element), plan.resultingText)
+                    && self.access.selection(in: element) == plan.finalSelection
+                    && self.isCurrent(element, request: request)
+            }
+        default:
+            let evidence = await cleanup(plan, in: element, request: request, mutation: mutation)
+            if evidence != .recoveredObserved { mutation.recordCleanup(evidence, validateFresh: { false }) }
+        }
     }
 
     private func replace(

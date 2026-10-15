@@ -64,11 +64,6 @@ public struct ConversionSafetyOperationToken: Hashable, Sendable {
 public struct ConversionSafetySubmissionToken: Hashable, Sendable {
     public let operation: ConversionSafetyOperationToken
     public let ordinal: UInt64
-
-    init(operation: ConversionSafetyOperationToken, ordinal: UInt64) {
-        self.operation = operation
-        self.ordinal = ordinal
-    }
 }
 
 /// Одна проверка cleanup начинается до чтения и не переживает изменение revision журнала.
