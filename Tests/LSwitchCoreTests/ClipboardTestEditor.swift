@@ -14,6 +14,8 @@ final class ClipboardEditor {
     var sleeps = 0
     var preparations = 0
     var stateReads = 0
+    var inputBarriers = 0
+    var diagnosticsBindings: [Bool] = []
     var exposesState = true
     var initialStateUnavailable = false
     var commitAvailable = true
@@ -24,14 +26,23 @@ final class ClipboardEditor {
     var rangeWriteApplies = true
     var rangeWriteSucceeds = true
     var rangeWrites: [NSRange] = []
+    var rangeDelay = 0
+    var pendingRanges: [(range: NSRange, sleeps: Int)] = []
     var ignoreCollapseSelection = false
     var selectedTextAvailable = true
     var rejectedPasteClearsSelection = false
     var pendingPaste: String?
     var sleepDelays: [TimeInterval] = []
+    var commandTransport: ClipboardCommandTransport?
     var safe = true
     var current = true
     var requestValid = true
+    var safetyFailure: (() -> ConversionDiagnostics.Rejection?)?
+    var snapshotOverride: PasteboardSnapshot?
+    var captureOverride: (() async -> PasteboardCaptureResult)?
+    var documentContext: AutomaticTextContext = .prose
+    var selectionMethod: ClipboardEnvironment.SelectionMethod = .accessibility
+    var onContextRead: () -> Void = {}
     var keepPastedSelection = false
     var rejectPaste = false
     var copyResults: [String?] = []
@@ -39,6 +50,7 @@ final class ClipboardEditor {
     var mutationEvents: [String] = []
     var onSleep: (Int) -> Void = { _ in }
     var onPrepare: () -> Void = {}
+    var onInputBarrier: () async -> Void = {}
     var onWrite: () -> Void = {}
     var onReadState: (Int) -> Void = { _ in }
     var onRangeWrite: (NSRange) -> Void = { _ in }
@@ -66,34 +78,16 @@ final class ClipboardEditor {
         return (text, NSRange(location: location, length: length))
     }
 
-    func converter() -> ClipboardConverter {
-        ClipboardConverter(environment: ClipboardEnvironment(
-            captureContext: {
-                guard self.safe else { return nil }
-                return ClipboardEnvironment.Context(
-                    isValid: { self.safe && self.current },
-                    selectedText: { self.selectedTextAvailable ? self.selectedText : nil },
-                    readState: { self.state }, setSelection: { self.setRange($0) }
-                )
-            },
+    func converter(configuration: ClipboardConverter.Configuration = .init()) -> ClipboardConverter {
+        ClipboardConverter(configuration: configuration, environment: ClipboardEnvironment(
+            captureContext: { self.makeContext() },
             prepare: { isValid in
                 guard isValid() else { return }
                 self.preparations += 1
                 self.onPrepare()
             },
-            capture: {
-                self.captures += 1
-                return PasteboardSnapshot(items: [
-                    .init(dataByType: ["text": Data(self.clipboard.utf8)])
-                ])
-            },
-            restore: { snapshot in
-                self.restores += 1
-                if let item = snapshot.items.first, let data = item.dataByType["text"], let data,
-                   let text = String(bytes: data, encoding: .utf8) {
-                    self.updateClipboard(text)
-                }
-            },
+            capture: { await self.captureSnapshot() },
+            restore: { self.restoreSnapshot($0) },
             changeCount: { self.count },
             string: { self.clipboard },
             write: {
@@ -103,14 +97,58 @@ final class ClipboardEditor {
                 self.onWrite()
                 return (true, ownedCount)
             },
-            send: { command, isValid in self.deliver(command, isValid: isValid) },
-            commitPaste: { select, check, isValid in self.commit(select: select, check: check, isValid: isValid) },
+            send: { command, isValid in
+                if let transport = self.commandTransport { return await transport.send(command, isValid: isValid) }
+                return self.deliver(command, isValid: isValid)
+            },
+            commitPaste: { select, check, isValid in
+                if let transport = self.commandTransport {
+                    return await transport.commitPaste(select: select, check: check, isValid: isValid)
+                }
+                return await self.commit(select: select, check: check, isValid: isValid)
+            },
             sleep: { delay in
                 self.sleepDelays.append(delay)
                 self.sleeps += 1
+                self.flushPendingRanges()
                 self.onSleep(self.sleeps)
-            }
+            },
+            waitForPendingInput: {
+                self.inputBarriers += 1
+                await self.onInputBarrier()
+            },
+            bindDiagnostics: { self.diagnosticsBindings.append($0 != nil) }
         ))
+    }
+
+    private func makeContext() -> ClipboardEnvironment.Context? {
+        guard safe else { return nil }
+        return ClipboardEnvironment.Context(
+            isValid: { self.safe && self.current },
+            selectedText: { self.selectedTextAvailable ? self.selectedText : nil },
+            readState: { self.state }, setSelection: { self.setRange($0) }, safetyFailure: safetyFailure,
+            automaticContext: {
+                self.onContextRead()
+                return self.documentContext
+            }, documentIdentity: { self.documentContext.documentIdentity }, selectionMethod: selectionMethod
+        )
+    }
+
+    private func captureSnapshot() async -> PasteboardCaptureResult {
+        captures += 1
+        if let capture = captureOverride { return await capture() }
+        if let snapshotOverride { return .captured(snapshotOverride, changeCount: count) }
+        return .captured(PasteboardSnapshot(items: [
+            .init(dataByType: ["text": Data(clipboard.utf8)])
+        ]), changeCount: count)
+    }
+
+    private func restoreSnapshot(_ snapshot: PasteboardSnapshot) {
+        restores += 1
+        if let item = snapshot.items.first, let data = item.dataByType["text"], let data,
+           let text = String(bytes: data, encoding: .utf8) {
+            updateClipboard(text)
+        }
     }
 
     func updateClipboard(_ value: String) {
@@ -127,9 +165,11 @@ final class ClipboardEditor {
         selection = nil
     }
 
-    private func commit(select: () -> Bool, check: () -> Bool, isValid: () -> Bool) -> MenuCommand.Outcome {
+    private func commit(
+        select: () async -> Bool, check: () -> Bool, isValid: () -> Bool
+    ) async -> MenuCommand.Outcome {
         guard commitAvailable else { return .unavailable }
-        let selected = select()
+        let selected = await select()
         let confirmed = check()
         guard selected, confirmed, isValid(), deliver(.paste, isValid: isValid) else { return .failed }
         return isValid() && !commitReportsFailure ? .performed : .failed
@@ -139,13 +179,29 @@ final class ClipboardEditor {
         guard rangeSettable else { return false }
         rangeWrites.append(range)
         guard rangeWriteApplies else { return rangeWriteSucceeds }
-        guard let indices = Range(range, in: text) else { return false }
+        if rangeDelay > 0 {
+            pendingRanges.append((range, rangeDelay))
+        } else {
+            applyRange(range)
+        }
+        onRangeWrite(range)
+        return rangeWriteSucceeds
+    }
+
+    private func flushPendingRanges() {
+        pendingRanges = pendingRanges.map { ($0.range, $0.sleeps - 1) }
+        while let pending = pendingRanges.first, pending.sleeps <= 0 {
+            applyRange(pending.range)
+            pendingRanges.removeFirst()
+        }
+    }
+
+    private func applyRange(_ range: NSRange) {
+        guard let indices = Range(range, in: text) else { return }
         let lower = text[..<indices.lowerBound].count
         let upper = text[..<indices.upperBound].count
         selection = range.length == 0 ? nil : lower..<upper
         cursor = upper
-        onRangeWrite(range)
-        return rangeWriteSucceeds
     }
 
     private func deliver(_ command: ClipboardCommand, isValid: () -> Bool) -> Bool {

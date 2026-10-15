@@ -18,11 +18,21 @@ public final class AppProfiles {
     public func prefersClipboard(bundleID: String) -> Bool {
         // WebKit может сообщить успех AX-записи без замены, оставив DOM-выделение
         // несогласованным с AX. Для Safari используем нативный Copy/Paste сразу.
-        if bundleID == "com.apple.Safari" { return true }
+        if bundleID == "com.apple.Safari" || bundleID == "com.google.Chrome" { return true }
         if let cached = cache[bundleID] { return cached }
         let detected = detectElectron(bundleID: bundleID)
         cache[bundleID] = detected
         return detected
+    }
+
+    /// AXPress меню Chrome принят без эффекта в живой проверке; CGEvent Cmd+C/V работают.
+    static func prefersKeyboardCommands(bundleID: String?) -> Bool {
+        bundleID == "com.google.Chrome"
+    }
+
+    /// Транспорт выбирается до мутации; AX остаётся источником проверяемого снимка.
+    static func prefersKeyboardSelection(bundleID: String?) -> Bool {
+        bundleID == "com.google.Chrome"
     }
 
     private func detectElectron(bundleID: String) -> Bool {

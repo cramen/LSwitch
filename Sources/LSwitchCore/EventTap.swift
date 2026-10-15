@@ -115,3 +115,69 @@ public struct KeystrokeClassifier: Sendable {
         return .control
     }
 }
+extension EventTapCore {
+    /// Отделено от доставки для проверки CGEvent и снимка без отправки клавиш в UI.
+    func correctedRawEvent(type: CGEventType, event: CGEvent) -> RawKeyEvent? {
+        guard let original = Self.makeRawEvent(type: type, event: event) else { return nil }
+        guard let correction = currentInputCorrection else { return original }
+        let corrected = correction.corrected(original)
+        guard corrected.characters != original.characters else { return original }
+        let units = Array(corrected.characters.utf16)
+        event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
+        return Self.makeRawEvent(type: type, event: event)
+    }
+
+    static func makeRawEvent(type: CGEventType, event: CGEvent) -> RawKeyEvent? {
+        let rawType: RawKeyEventType
+        switch type {
+        case .keyDown: rawType = .keyDown
+        case .keyUp: rawType = .keyUp
+        case .flagsChanged: rawType = .flagsChanged
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: rawType = .other
+        default: return nil
+        }
+
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        var characters = ""
+        if length > 0 {
+            var buffer = [UniChar](repeating: 0, count: length)
+            event.keyboardGetUnicodeString(
+                maxStringLength: length,
+                actualStringLength: &length,
+                unicodeString: &buffer
+            )
+            characters = String(utf16CodeUnits: buffer, count: length)
+        }
+
+        return RawKeyEvent(
+            type: rawType,
+            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
+            characters: characters,
+            modifierFlags: event.flags.rawValue,
+            isSynthetic: SyntheticEventMarker.isSynthetic(event),
+            timestamp: event.timestamp
+        )
+    }
+}
+
+/// Не меняет доставку в приложение: отбрасывает только обработку снимков до разрыва потока.
+struct EventDeliveryGate {
+    private(set) var cutoff: UInt64 = 0
+    mutating func reset(at timestamp: UInt64) { cutoff = max(cutoff, timestamp) }
+    func accepts(timestamp: UInt64) -> Bool { timestamp >= cutoff }
+}
+
+/// C-callback для CGEventTap. Извлекает EventTapCore из userInfo и делегирует.
+func eventTapCallback(
+    proxy: CGEventTapProxy,
+    type: CGEventType,
+    event: CGEvent,
+    userInfo: UnsafeMutableRawPointer?
+) -> Unmanaged<CGEvent>? {
+    guard let userInfo else {
+        return Unmanaged.passUnretained(event)
+    }
+    let core = Unmanaged<EventTapCore>.fromOpaque(userInfo).takeUnretainedValue()
+    return core.handleTapEvent(type: type, event: event)
+}

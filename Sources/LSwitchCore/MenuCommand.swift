@@ -5,7 +5,7 @@ import os
 /// Команда активного приложения вызывается через AX без открытия меню и смены фокуса.
 @MainActor
 enum MenuCommand {
-    enum Outcome {
+    enum Outcome: Equatable {
         case performed
         case unavailable
         /// AXPress уже отправлен либо контекст устарел; повторять команду нельзя.
@@ -54,14 +54,13 @@ enum MenuCommand {
         return press(item, command: command, isValid: isValid)
     }
 
-    /// Между выбором диапазона, проверкой и AXPress нет собственного ожидания;
-    /// актуальность контекста и текста проверяется отдельно.
+    /// Paste разрешён после устойчивого AX-выделения и повторной проверки меню/контекста.
     static func pasteAfterSelection(
         targetPID: pid_t,
-        select: () -> Bool,
+        select: () async -> Bool,
         afterSelectionCheck: () -> Bool,
         isValid: () -> Bool
-    ) -> Outcome {
+    ) async -> Outcome {
         guard targetPID > 0, isValid() else {
             logger.notice("transport=menu stage=prepare context=false")
             return .failed
@@ -70,7 +69,7 @@ enum MenuCommand {
             logger.notice("transport=menu stage=prepare available=false")
             return .unavailable
         }
-        let selected = select()
+        let selected = await select()
         let confirmed = afterSelectionCheck()
         guard selected else {
             logger.notice("transport=menu stage=select applied=false check=\(confirmed, privacy: .public)")
@@ -84,6 +83,8 @@ enum MenuCommand {
             logger.notice("transport=menu stage=check context=false")
             return .failed
         }
+        guard let current = enabledItem(.paste, targetPID: targetPID), CFEqual(current, item),
+              isValid(), afterSelectionCheck() else { return .failed }
         return press(item, command: .paste, isValid: isValid)
     }
 

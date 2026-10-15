@@ -92,13 +92,13 @@ public final class AXTextConverter: ConversionEngine {
         access.focusedElement()
     }
 
-    public func perform(_ request: ConversionRequest) -> ConversionResult {
-        execute(request, transform: request.converted).result
+    public func perform(_ request: ConversionRequest) async -> ConversionResult {
+        await execute(request, transform: request.converted).result
     }
 
     /// Обёртка для диагностического режима; основной путь использует явный запрос.
-    public func convert() -> Result<Outcome, AXConvertError> {
-        let execution = execute(ConversionRequest(), transform: transform)
+    public func convert() async -> Result<Outcome, AXConvertError> {
+        let execution = await execute(ConversionRequest(), transform: transform)
         switch execution.result {
         case .success(let receipt):
             return .success(Outcome(
@@ -115,42 +115,55 @@ public final class AXTextConverter: ConversionEngine {
         }
     }
 
+    private final class Mutation {
+        var attempted = false
+    }
+
     private func execute(
         _ request: ConversionRequest,
         transform: (String) -> String
-    ) -> (result: ConversionResult, wasSelection: Bool) {
+    ) async -> (result: ConversionResult, wasSelection: Bool) {
         guard request.isValid(), let element = access.focusedElement(),
               !access.isProtected(element) else {
             return (logged(.blocked, reason: "protected-or-invalid-context"), false)
         }
+        let context = request.isAutomatic ? access.automaticContext(in: element) : .prose
+        let identity = request.isAutomatic ? context.documentIdentity : access.documentIdentity(in: element)
+        let targetCheck = ConversionDocumentTarget.check(identity: identity, read: {
+            self.access.documentIdentity(in: element)
+        })
+        let scoped = request.checkingDocumentContext(context, read: { self.access.automaticContext(in: element) })
+        let request = request.isAutomatic ? scoped : scoped.checkingTarget(targetCheck)
+        guard isCurrent(element, request: request) else { return (.blocked, false) }
         guard let text = access.text(in: element), let selection = access.selection(in: element),
               let plan = AXReplacementPlan(text: text, selection: selection, request: request, transform: transform)
         else { return (logged(.unavailable, reason: "snapshot-or-plan-unavailable"), false) }
+        guard request.permitsAutomaticContext(context, plan: plan), isCurrent(element, request: request) else {
+            return (logged(.blocked, reason: "automatic-context-not-permitted"), plan.wasSelection)
+        }
         guard access.canReplaceText(in: element), access.canSetSelection(in: element) else {
             return (logged(.unavailable, reason: "attributes-not-settable"), plan.wasSelection)
         }
-        let result = replace(plan, in: element, request: request)
-        if !request.isValid() { cleanupAfterAbort(plan, in: element, request: request) }
-        return (result, plan.wasSelection)
-    }
-
-    private func cleanupAfterAbort(_ plan: AXReplacementPlan, in element: AXUIElement, request: ConversionRequest) {
-        guard request.canCleanup(), let focused = access.focusedElement(), CFEqual(focused, element),
-              !access.isProtected(element), let text = access.text(in: element),
-              let selection = access.selection(in: element), request.canCleanup() else { return }
-        if text == plan.text && selection == plan.range && !plan.wasSelection {
-            _ = access.setSelection(plan.selection, in: element)
-        } else if text == plan.resultingText,
-                  selection == NSRange(location: plan.range.location, length: plan.replacement.utf16.count) {
-            _ = access.setSelection(plan.finalSelection, in: element)
+        let mutation = Mutation()
+        let result = await replace(plan, in: element, request: request, mutation: mutation)
+        if mutation.attempted {
+            switch result {
+            case .success: break
+            default: await cleanup(plan, in: element, request: request)
+            }
         }
+        if case .success(let receipt) = result {
+            return (.success(receipt.checkingTarget(targetCheck)), plan.wasSelection)
+        }
+        return (result, plan.wasSelection)
     }
 
     private func replace(
         _ plan: AXReplacementPlan,
         in element: AXUIElement,
-        request: ConversionRequest
-    ) -> ConversionResult {
+        request: ConversionRequest,
+        mutation: Mutation
+    ) async -> ConversionResult {
         guard isCurrent(element, request: request),
               access.text(in: element) == plan.text,
               access.selection(in: element) == plan.selection else {
@@ -160,90 +173,92 @@ public final class AXTextConverter: ConversionEngine {
             return logged(.blocked, reason: "input-hold-unavailable")
         }
         if plan.range != plan.selection {
+            mutation.attempted = true
             guard access.setSelection(plan.range, in: element) else {
-                let result = restoreSelection(plan, in: element, request: request)
-                return logged(result, reason: "selection-write-failed")
+                return logged(.failed, reason: "selection-write-failed")
+            }
+            let settled = await settle(
+                text: plan.text, selection: plan.range, allowed: [plan.selection, plan.range],
+                in: element, isValid: { self.isCurrent(element, request: request) }
+            )
+            guard settled else {
+                let result: ConversionResult = isCurrent(element, request: request) ? .failed : .blocked
+                return logged(result, reason: "selection-not-settled")
             }
         }
-        guard isCurrent(element, request: request), access.text(in: element) == plan.text else {
+        guard isCurrent(element, request: request), access.text(in: element) == plan.text,
+              access.selection(in: element) == plan.range else {
             return logged(.blocked, reason: "context-changed-after-selection")
         }
-        guard access.selection(in: element) == plan.range else {
-            let result = restoreSelection(plan, in: element, request: request)
-            return logged(result, reason: "selection-not-confirmed")
-        }
-        let written = access.replaceSelectedText(plan.replacement, in: element)
-        guard written else {
-            _ = recoverAfterWrite(plan, in: element, request: request)
+        mutation.attempted = true
+        guard access.replaceSelectedText(plan.replacement, in: element) else {
             return logged(.failed, reason: "text-write-failed")
         }
-        return finishWrite(plan, in: element, request: request)
+        return await finishWrite(plan, in: element, request: request)
     }
 
     private func finishWrite(
         _ plan: AXReplacementPlan,
         in element: AXUIElement,
         request: ConversionRequest
-    ) -> ConversionResult {
-        guard isCurrent(element, request: request) else {
-            return logged(.failed, reason: "context-changed-after-write")
+    ) async -> ConversionResult {
+        guard isCurrent(element, request: request), access.text(in: element) == plan.resultingText else {
+            return logged(.failed, reason: "text-write-not-confirmed")
         }
-        guard access.text(in: element) == plan.resultingText else {
-            let result = recoverAfterWrite(plan, in: element, request: request)
-            return logged(result, reason: "text-write-not-confirmed")
-        }
-        guard access.setSelection(plan.finalSelection, in: element) else {
+        let inserted = NSRange(location: plan.range.location, length: plan.replacement.utf16.count)
+        let wordCaret = NSRange(location: plan.range.location + plan.receipt.converted.utf16.count, length: 0)
+        let known = [inserted, plan.finalSelection, wordCaret]
+        guard let current = access.selection(in: element), known.contains(current),
+              isCurrent(element, request: request), access.setSelection(plan.finalSelection, in: element) else {
             return logged(.failed, reason: "final-caret-write-failed")
         }
-        guard isCurrent(element, request: request),
-              access.text(in: element) == plan.resultingText,
-              access.selection(in: element) == plan.finalSelection else {
-            return logged(.failed, reason: "final-state-not-confirmed")
-        }
+        let settled = await settle(
+            text: plan.resultingText, selection: plan.finalSelection, allowed: known,
+            in: element, isValid: { self.isCurrent(element, request: request) }
+        )
+        guard settled else { return logged(.failed, reason: "final-state-not-settled") }
         return logged(.success(plan.receipt), reason: "replacement-confirmed")
     }
 
-    /// «Успешный» AX no-op разрешает fallback лишь после полного восстановления снимка.
-    private func recoverAfterWrite(
-        _ plan: AXReplacementPlan,
-        in element: AXUIElement,
-        request: ConversionRequest
-    ) -> ConversionResult {
-        guard isCurrent(element, request: request), let text = access.text(in: element) else { return .failed }
-        if text == plan.text {
-            return restoreSelection(plan, in: element, request: request)
-        }
-        // При иной записи текст не трогаем. Снимаем только узнаваемое собственное выделение.
-        guard let selection = access.selection(in: element),
-              let caret = plan.cleanupCaret(in: text, selection: selection),
-              isCurrent(element, request: request), access.text(in: element) == text,
-              access.selection(in: element) == selection else { return .failed }
-        let collapsed = access.setSelection(caret, in: element)
-        let verified = collapsed && access.selection(in: element) == caret
-        logger.info("AX cleanup изменённого текста: каретка подтверждена=\(verified, privacy: .public)")
-        return .failed
+    /// Исходная каретка может быть устаревшим readback ещё не применённого setter.
+    /// Поэтому после своей попытки повторяем восстановление даже при равенстве.
+    private func cleanup(_ plan: AXReplacementPlan, in element: AXUIElement, request: ConversionRequest) async {
+        let allowed = { self.isCurrent(element, request: request, cleanup: true) }
+        guard allowed(), let text = access.text(in: element), let selection = access.selection(in: element),
+              allowed() else { return }
+        let target: NSRange
+        if text == plan.text, selection == plan.selection || selection == plan.range {
+            target = plan.selection
+        } else if let caret = plan.cleanupCaret(in: text, selection: selection) {
+            target = caret
+        } else { return }
+        guard allowed(), access.text(in: element) == text, access.selection(in: element) == selection,
+              allowed() else { return }
+        _ = access.setSelection(target, in: element)
+        let settled = await settle(
+            text: text, selection: target, allowed: [selection, target, plan.range], in: element, isValid: allowed
+        )
+        logger.info("AX cleanup: каретка подтверждена=\(settled, privacy: .public)")
     }
 
-    private func isCurrent(_ element: AXUIElement, request: ConversionRequest) -> Bool {
-        guard request.isValid(), let focused = access.focusedElement(), CFEqual(focused, element) else {
-            return false
-        }
+    private func settle(
+        text: String, selection: NSRange, allowed: [NSRange],
+        in element: AXUIElement, isValid: () -> Bool
+    ) async -> Bool {
+        await SelectionSettlement.wait(
+            expected: (text, selection), allowedSelections: allowed, isValid: isValid,
+            read: {
+                guard let text = self.access.text(in: element),
+                      let selection = self.access.selection(in: element) else { return nil }
+                return (text, selection)
+            }, pause: { await self.access.waitForUpdate() }
+        )
+    }
+
+    private func isCurrent(_ element: AXUIElement, request: ConversionRequest, cleanup: Bool = false) -> Bool {
+        guard cleanup ? request.canCleanup() : request.isValid(),
+              let focused = access.focusedElement(), CFEqual(focused, element) else { return false }
         return !access.isProtected(element)
-    }
-
-    /// Fallback допустим только после подтверждения неизменного текста и исходного выделения.
-    private func restoreSelection(
-        _ plan: AXReplacementPlan,
-        in element: AXUIElement,
-        request: ConversionRequest
-    ) -> ConversionResult {
-        guard isCurrent(element, request: request), access.text(in: element) == plan.text else { return .blocked }
-        if access.selection(in: element) != plan.selection {
-            guard access.setSelection(plan.selection, in: element) else { return .failed }
-        }
-        guard isCurrent(element, request: request), access.text(in: element) == plan.text,
-              access.selection(in: element) == plan.selection else { return .failed }
-        return .unavailable
     }
 
     private func logged(_ result: ConversionResult, reason: String) -> ConversionResult {

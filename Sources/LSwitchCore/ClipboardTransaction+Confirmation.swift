@@ -36,19 +36,24 @@ extension ClipboardTransaction {
         guard valid else { return false }
         if expectation.isConfirmed(state) { return true }
         guard state.text == expectation.expectedText, state.selection == expectation.insertedRange else { return false }
-        if collapseKnownSelection(state) { return valid }
+        if await collapseKnownSelection(state) { return valid }
         guard verifiedPlan == nil, await collapseSelection(), valid,
               let collapsed = context?.readState() else { return false }
         return expectation.isConfirmed(collapsed)
     }
 
-    func collapseKnownSelection(_ state: ClipboardEnvironment.TextState) -> Bool {
+    func collapseKnownSelection(_ state: ClipboardEnvironment.TextState) async -> Bool {
         guard cleanupAllowed, let current = context?.readState(),
               current.text == state.text, current.selection == state.selection else { return false }
         let caret = NSRange(location: NSMaxRange(state.selection), length: 0)
-        guard cleanupAllowed, context?.setSelection(caret) == true, cleanupAllowed,
-              let after = context?.readState() else { return false }
-        return after.text == state.text && after.selection == caret
+        guard cleanupAllowed else { return false }
+        if usesKeyboardSelection {
+            return await collapseKeyboardSelection(state, caret: caret, allowed: [state.selection, caret])
+        }
+        _ = context?.setSelection(caret)
+        return await settleSelection(
+            text: state.text, selection: caret, allowed: [state.selection, caret], cleanup: true
+        )
     }
 
     func cleanupPaste(expectation: PasteExpectation?, original: String, inserted: String) async {
@@ -58,9 +63,9 @@ extension ClipboardTransaction {
                   expectation.recognizesSelection(state) else { return }
             if let verifiedPlan {
                 if state.text == verifiedPlan.text {
-                    restoreVerifiedSelection(verifiedPlan)
+                    await restoreVerifiedSelection(verifiedPlan)
                 } else {
-                    _ = collapseKnownSelection(state)
+                    _ = await collapseKnownSelection(state)
                 }
                 return
             }

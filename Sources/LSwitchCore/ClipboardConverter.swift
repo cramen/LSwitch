@@ -13,6 +13,19 @@ public final class ClipboardConverter: ConversionEngine {
         public var preCopyDelay: TimeInterval = 0.02
         public var maxAttempts = 3
 
+        #if DEBUG
+        /// Проверка резервного Copy-пути без изменения последующих AX-проверок.
+        public var forceCopyForAcceptance = false
+        #endif
+
+        var allowsSnapshotPath: Bool {
+            #if DEBUG
+            return !forceCopyForAcceptance
+            #else
+            return true
+            #endif
+        }
+
         public init() {}
     }
 
@@ -40,6 +53,15 @@ public final class ClipboardConverter: ConversionEngine {
         self.environment = environment
         self.transform = nil
     }
+
+    #if DEBUG
+    public convenience init(acceptanceConfiguration: Configuration, keyboardOnly: Bool) {
+        self.init(
+            configuration: acceptanceConfiguration,
+            environment: .live(pasteboard: .general, keyboardOnly: keyboardOnly)
+        )
+    }
+    #endif
 
     public func perform(_ request: ConversionRequest) async -> ConversionResult {
         await perform(request, environment: environment)

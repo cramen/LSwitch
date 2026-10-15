@@ -53,10 +53,37 @@ public final class AutoSwitchCoordinator: @unchecked Sendable {
     /// если слово нужно автоконвертировать.
     public func evaluate(word: String) -> String? {
         guard case .wrongLayout(let converted) = classifier.verdict(for: word) else { return nil }
+        rememberAutomaticWord(word)
+        return converted
+    }
+
+    /// Кавычка может быть буквой неправильной раскладки: полное слово всегда имеет приоритет.
+    /// Любой защитный отказ запрещает дальнейшее сужение кандидата.
+    public func evaluate(context: KeystrokeBuffer.WordContext) -> KeystrokeBuffer.WordContext? {
+        var candidate = context
+        for removedQuotes in 0...3 {
+            switch classifier.verdict(for: candidate.word) {
+            case .wrongLayout:
+                rememberAutomaticWord(candidate.word)
+                return candidate
+            case .blockedByHeuristics:
+                return nil
+            case .correct:
+                guard removedQuotes < 3, let first = candidate.word.first, first == "\"" || first == "'" else {
+                    return nil
+                }
+                candidate = KeystrokeBuffer.WordContext(
+                    word: String(candidate.word.dropFirst()), trailingText: context.trailingText
+                )
+            }
+        }
+        return nil
+    }
+
+    private func rememberAutomaticWord(_ word: String) {
         lock.lock()
         lastAutoConvertedWord = word
         lock.unlock()
-        return converted
     }
 
     /// Откат автоконвертации: учит словарь. Откаты ручной конвертации

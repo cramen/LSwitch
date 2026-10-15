@@ -31,10 +31,14 @@ public final class LayoutManager {
     }
 
     public func currentSourceID() -> String? {
-        guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue() else {
-            return nil
+        let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue()
+        let identifier = source.flatMap { copyStringProperty(of: $0, key: kTISPropertyInputSourceID) }
+        #if DEBUG
+        if Thread.isMainThread {
+            MainActor.assumeIsolated { TISSourceDiagnostics.recordRead(layoutSourceID: identifier) }
         }
-        return copyStringProperty(of: source, key: kTISPropertyInputSourceID)
+        #endif
+        return identifier
     }
 
     /// ID всех включённых источников ввода — для диагностики нестандартных
@@ -54,14 +58,29 @@ public final class LayoutManager {
     public func switchTo(_ layout: Layout) -> Bool {
         guard currentLayout() != layout else { return true }
         guard let source = findSource(for: layout) else { return false }
-        guard TISSelectInputSource(source) == noErr else { return false }
+        let status = TISSelectInputSource(source)
+        #if DEBUG
+        recordSelection(stage: "select", target: layout, status: status)
+        #endif
+        guard status == noErr else { return false }
         // Переключение не мгновенное — проверяем с паузой и повторяем раз.
         for _ in 0..<2 where currentLayout() != layout {
             Thread.sleep(forTimeInterval: 0.1)
-            TISSelectInputSource(source)
+            let retryStatus = TISSelectInputSource(source)
+            #if DEBUG
+            recordSelection(stage: "retry", target: layout, status: retryStatus)
+            #endif
+            _ = retryStatus
         }
         return currentLayout() == layout
     }
+
+    #if DEBUG
+    private func recordSelection(stage: String, target: Layout, status: OSStatus) {
+        guard Thread.isMainThread else { return }
+        MainActor.assumeIsolated { TISSourceDiagnostics.recordSwitch(stage: stage, target: target, status: status) }
+    }
+    #endif
 
     private func findSource(for layout: Layout) -> TISInputSource? {
         guard let list = TISCreateInputSourceList(nil, true)?.takeRetainedValue() as? [TISInputSource] else {

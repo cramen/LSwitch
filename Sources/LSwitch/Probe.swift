@@ -10,10 +10,6 @@ import LSwitchCore
 /// P0.4/5.1: сравнение обычной и sandbox-сборки одного бинарника.
 enum Probe {
 
-    private final class Counter {
-        var received = 0
-    }
-
     static func run() -> Never {
         print("== LSwitch probe ==")
         print("sandbox: \(isSandboxed() ? "да" : "нет")")
@@ -26,39 +22,11 @@ enum Probe {
     }
 
     private static func checkEventTap() {
-        let eventMask: CGEventMask = 1 << CGEventType.keyDown.rawValue
-        let counter = Counter()
-        let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: eventMask,
-            callback: { _, _, event, userInfo in
-                if let userInfo {
-                    let counter = Unmanaged<Counter>.fromOpaque(userInfo).takeUnretainedValue()
-                    counter.received += 1
-                }
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: Unmanaged.passUnretained(counter).toOpaque()
-        )
-        print("tapCreate (keyboard, listenOnly): \(tap != nil ? "создан" : "НЕ СОЗДАН (nil)")")
-        guard let tap else { return }
-
-        let source = CFMachPortCreateRunLoopSource(nil, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-        guard let event = CGEvent(keyboardEventSource: nil, virtualKey: 0x31, keyDown: true) else {
-            print("не удалось создать тестовое событие")
-            return
-        }
-        event.post(tap: .cghidEventTap)
-        // Крутим runloop до 2 секунд, ожидая доставку события в tap.
-        let deadline = Date().addingTimeInterval(2)
-        while Date() < deadline && counter.received == 0 {
-            RunLoop.main.run(mode: .default, before: Date().addingTimeInterval(0.05))
-        }
-        print("доставка событий в tap: \(counter.received > 0 ? "РАБОТАЕТ" : "МОЛЧИТ (нет событий за 2 с)")")
+        let report = AcceptanceEventTapProbe.run()
+        let created = report["tapCreated"] as? Bool == true
+        let received = report["received"] as? Int ?? 0
+        print("tapCreate (keyUp nonce, listenOnly): \(created ? "создан" : "НЕ СОЗДАН")")
+        print("доставка собственного nonce: \(received), ожидается ровно 1; keyDown не отправлялся")
     }
 
     private static func checkAccessibility() {

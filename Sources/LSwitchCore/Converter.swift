@@ -1,68 +1,5 @@
 import Foundation
 
-public enum ConversionMode: String, Sendable {
-    case accessibility
-    case clipboard
-}
-
-@MainActor
-public struct AXConversionEngine: ConversionEngine {
-    public init() {}
-    public func perform(_ request: ConversionRequest) async -> ConversionResult {
-        AXTextConverter().perform(request)
-    }
-}
-
-@MainActor
-public struct ClipboardConversionEngine: ConversionEngine {
-    public init() {}
-    public func perform(_ request: ConversionRequest) async -> ConversionResult {
-        await ClipboardConverter().perform(request)
-    }
-}
-
-/// Точный оригинал и контекст последней подтверждённой замены.
-public struct UndoRecord: Equatable, Sendable {
-    public let original: String
-    public let converted: String
-    public let layoutBefore: Layout
-    public let timestamp: Date
-    public let trailingText: String
-    public let bundleID: String?
-
-    public init(
-        original: String, converted: String, layoutBefore: Layout, timestamp: Date,
-        trailingText: String = "", bundleID: String? = nil
-    ) {
-        self.original = original
-        self.converted = converted
-        self.layoutBefore = layoutBefore
-        self.timestamp = timestamp
-        self.trailingText = trailingText
-        self.bundleID = bundleID
-    }
-}
-
-/// Используется оркестратором и UI только на главном потоке.
-public final class UndoStore {
-    public var window: TimeInterval = 3
-    private var record: UndoRecord?
-    private let now: () -> Date
-
-    public init(now: @escaping () -> Date = { Date() }) { self.now = now }
-    public func save(_ record: UndoRecord) { self.record = record }
-    public func invalidate() { record = nil }
-
-    public func pendingUndo() -> UndoRecord? {
-        guard let record else { return nil }
-        guard now().timeIntervalSince(record.timestamp) <= window else {
-            self.record = nil
-            return nil
-        }
-        return record
-    }
-}
-
 /// Один владелец состояния замены и отмены; фоновые шаги не пересекаются.
 @MainActor
 public final class Converter {
@@ -106,15 +43,27 @@ public final class Converter {
     private let prefersClipboard: (String) -> Bool
     private let makeAXEngine: () -> any ConversionEngine
     private let makeClipboardEngine: () -> any ConversionEngine
-    private let captureContext: ContextCapture
+    private let captureContext: ContextCapture?
     private let onConverted: () -> Void
     private let onLayoutSwitched: (Layout, Layout, UInt64) -> Void
     private let beginInputHold: () -> Bool
     private let endInputHold: () -> Void
     private let isInputHoldValid: () -> Bool
+    private let drainPendingInput: () async -> Void
     private var inputHeld = false
     private var revision: UInt64 = 0
     private var undoContext: ContextCheck?
+    private var undoDocumentTarget: ConversionReceipt.TargetCheck?
+    private var diagnosticAttempts: [String: Int] = [:]
+
+    private struct OperationContext {
+        let bundleID: String
+        let layout: Layout
+        let startedAt: UInt64
+        let valid: ContextCheck
+        let cleanup: ContextCheck
+        let diagnostics: ConversionDiagnostics
+    }
     public private(set) var isBusy = false
     public private(set) var modeCache: [String: ConversionMode] = [:]
 
@@ -127,6 +76,7 @@ public final class Converter {
         beginInputHold: @escaping () -> Bool = { true },
         endInputHold: @escaping () -> Void = {},
         isInputHoldValid: @escaping () -> Bool = { true },
+        drainPendingInput: @escaping () async -> Void = {},
         onLayoutSwitched: @escaping (Layout, Layout, UInt64) -> Void = { _, _, _ in },
         onConverted: @escaping () -> Void = {}
     ) {
@@ -138,7 +88,7 @@ public final class Converter {
             makeAXEngine: { AXConversionEngine() },
             makeClipboardEngine: { ClipboardConversionEngine() },
             beginInputHold: beginInputHold, endInputHold: endInputHold,
-            isInputHoldValid: isInputHoldValid,
+            isInputHoldValid: isInputHoldValid, drainPendingInput: drainPendingInput,
             onLayoutSwitched: onLayoutSwitched,
             onConverted: onConverted
         )
@@ -153,13 +103,11 @@ public final class Converter {
         prefersClipboard: @escaping (String) -> Bool = { _ in false },
         makeAXEngine: @escaping () -> any ConversionEngine,
         makeClipboardEngine: @escaping () -> any ConversionEngine,
-        captureContext: @escaping ContextCapture = {
-            guard let target = InputSafety.captureTarget() else { return nil }
-            return { target.isCurrent() }
-        },
+        captureContext: ContextCapture? = nil,
         beginInputHold: @escaping () -> Bool = { true },
         endInputHold: @escaping () -> Void = {},
         isInputHoldValid: @escaping () -> Bool = { true },
+        drainPendingInput: @escaping () async -> Void = {},
         onLayoutSwitched: @escaping (Layout, Layout, UInt64) -> Void = { _, _, _ in },
         onConverted: @escaping () -> Void = {}
     ) {
@@ -177,26 +125,60 @@ public final class Converter {
         self.beginInputHold = beginInputHold
         self.endInputHold = endInputHold
         self.isInputHoldValid = isInputHoldValid
+        self.drainPendingInput = drainPendingInput
     }
 
     public func notifyOtherKeystroke() {
         revision &+= 1
         undoStore.invalidate()
         undoContext = nil
+        undoDocumentTarget = nil
     }
 
     @discardableResult
     public func trigger(
         expectedWord: String? = nil,
         trailingText: String = "",
-        allowUndo: Bool = true
+        allowUndo: Bool = true,
+        triggerTimestamp: UInt64? = nil,
+        diagnostics: ConversionDiagnostics? = nil
     ) async -> Outcome {
-        guard !isBusy else { return .busy }
-        guard let bundleID = frontmostBundleID(), !appRules.isBlocked(bundleID: bundleID) else {
+        let bundleID = frontmostBundleID()
+        let trace = diagnostics ?? makeDiagnostics(
+            bundleID: bundleID, triggerTimestamp: triggerTimestamp, automatic: !allowUndo
+        )
+        let outcome = await trigger(
+            expectedWord: expectedWord, trailingText: trailingText,
+            allowUndo: allowUndo, bundleID: bundleID, diagnostics: trace
+        )
+        trace.finish(outcome)
+        return outcome
+    }
+
+}
+
+extension Converter {
+    private func trigger(
+        expectedWord: String?, trailingText: String, allowUndo: Bool,
+        bundleID: String?, diagnostics: ConversionDiagnostics
+    ) async -> Outcome {
+        guard !isBusy else {
+            diagnostics.reject(.busy)
+            return .busy
+        }
+        guard let bundleID, !appRules.isBlocked(bundleID: bundleID) else {
+            diagnostics.reject(.rules)
             return .blockedByRules
         }
-        guard let check = captureContext(), check() else { return .blockedBySafety }
-        guard let layout = currentLayout() else { return .unsupportedLayout }
+        guard let check = captureCheck(diagnostics: diagnostics), check() else {
+            diagnostics.reject(.contextUnavailable)
+            return .blockedBySafety
+        }
+        diagnostics.mark(.contextCaptured)
+        guard let layout = currentLayout() else {
+            diagnostics.reject(.unsupportedLayout)
+            return .unsupportedLayout
+        }
         isBusy = true
         defer {
             if inputHeld { endInputHold() }
@@ -205,62 +187,96 @@ public final class Converter {
         }
         let started = revision
         let startedAt = DispatchTime.now().uptimeNanoseconds
-        guard beginInputHold() else { return .blockedBySafety }
+        guard beginInputHold() else {
+            diagnostics.reject(.holdUnavailable)
+            return .blockedBySafety
+        }
         inputHeld = true
+        diagnostics.mark(.holdAcquired)
         let cleanup: ContextCheck = { [weak self] in self?.frontmostBundleID() == bundleID && check() }
-        let valid = validityCheck(bundleID: bundleID, revision: started, context: check)
+        let valid = validityCheck(bundleID: bundleID, revision: started, context: check, diagnostics: diagnostics)
+        await drainPendingInput()
+        diagnostics.mark(.pendingInputDrained)
+        guard valid() else { return .blockedBySafety }
+        let operation = OperationContext(
+            bundleID: bundleID, layout: layout, startedAt: startedAt,
+            valid: valid, cleanup: cleanup, diagnostics: diagnostics
+        )
+        return await convert(expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
+                             operation: operation)
+    }
+
+    private func convert(
+        expectedWord: String?, trailingText: String, allowUndo: Bool, operation: OperationContext
+    ) async -> Outcome {
         if allowUndo, let record = undoStore.pendingUndo() {
-            guard record.bundleID == bundleID, undoContext?() == true else {
+            guard record.bundleID == operation.bundleID, undoContext?() == true else {
                 undoStore.invalidate()
                 undoContext = nil
+                undoDocumentTarget = nil
+                operation.diagnostics.reject(.contextChanged)
                 return .blockedBySafety
             }
-            return await undo(
-                record, bundleID: bundleID, layout: layout, startedAt: startedAt, checks: (valid, cleanup)
-            )
+            return await undo(record, operation: operation)
         }
         let request = ConversionRequest(
             expectedWord: expectedWord, trailingText: trailingText,
-            sourceLayout: layout, useSelection: allowUndo, beginMutation: mutationGuard(valid),
-            canCleanup: cleanup, isValid: valid
+            sourceLayout: operation.layout, useSelection: allowUndo, diagnostics: operation.diagnostics,
+            beginMutation: mutationGuard(operation.valid),
+            canCleanup: operation.cleanup, isValid: operation.valid
         )
-        let result = await perform(request, bundleID: bundleID)
-        guard case .success(let receipt) = result else { return outcome(for: result) }
-        guard valid() else { return .blockedBySafety }
+        let result = await perform(request, bundleID: operation.bundleID)
+        guard case .success(let receipt) = result else {
+            return outcome(for: result, diagnostics: operation.diagnostics)
+        }
+        operation.diagnostics.mark(.textConfirmed)
+        guard operation.valid(), receipt.targetIsCurrent?() != false else { return .blockedBySafety }
         undoStore.save(UndoRecord(
             original: receipt.original, converted: receipt.converted,
-            layoutBefore: layout, timestamp: Date(), trailingText: receipt.trailingText, bundleID: bundleID
+            layoutBefore: operation.layout, timestamp: Date(),
+            trailingText: receipt.trailingText, bundleID: operation.bundleID
         ))
-        undoContext = valid
-        let target = request.targetLayout(for: receipt.original) ?? layout.opposite
-        return finishConversion(receipt, target: target, source: layout, since: startedAt)
+        undoDocumentTarget = receipt.targetIsCurrent
+        undoContext = { operation.valid() && receipt.targetIsCurrent?() != false }
+        let target = request.targetLayout(for: receipt.original) ?? operation.layout.opposite
+        operation.diagnostics.recordLayoutDecision(source: operation.layout, target: target, receipt: receipt)
+        return finishConversion(receipt, target: target, source: operation.layout,
+                                since: operation.startedAt, diagnostics: operation.diagnostics)
     }
 
     private func finishConversion(
-        _ receipt: ConversionReceipt, target: Layout, source: Layout, since startedAt: UInt64
+        _ receipt: ConversionReceipt, target: Layout, source: Layout, since startedAt: UInt64,
+        diagnostics: ConversionDiagnostics
     ) -> Outcome {
-        guard switchAndRecord(target, from: source, since: startedAt) else {
+        guard switchAndRecord(target, from: source, since: startedAt, diagnostics: diagnostics) else {
             return .partiallyConverted(original: receipt.original, converted: receipt.converted, targetLayout: target)
         }
         onConverted()
         return .converted(original: receipt.original, converted: receipt.converted)
     }
 
-    private func undo(
-        _ record: UndoRecord, bundleID: String, layout: Layout, startedAt: UInt64,
-        checks: (valid: ContextCheck, cleanup: ContextCheck)
-    ) async -> Outcome {
+    private func undo(_ record: UndoRecord, operation: OperationContext) async -> Outcome {
+        let previousTarget = undoDocumentTarget
         undoStore.invalidate()
         undoContext = nil
+        undoDocumentTarget = nil
         let request = ConversionRequest(
             expectedWord: record.converted, trailingText: record.trailingText,
-            replacement: record.original, useSelection: false, beginMutation: mutationGuard(checks.valid),
-            canCleanup: checks.cleanup, isValid: checks.valid
+            replacement: record.original, useSelection: false, diagnostics: operation.diagnostics,
+            beginMutation: mutationGuard(operation.valid),
+            canCleanup: operation.cleanup, isValid: operation.valid
+        ).checkingTarget(previousTarget)
+        let result = await perform(request, bundleID: operation.bundleID)
+        guard case .success(let receipt) = result else {
+            return outcome(for: result, diagnostics: operation.diagnostics)
+        }
+        operation.diagnostics.mark(.textConfirmed)
+        guard request.isValid(), receipt.converted == record.original else { return .failed }
+        operation.diagnostics.recordLayoutDecision(
+            source: operation.layout, target: record.layoutBefore, receipt: receipt
         )
-        let result = await perform(request, bundleID: bundleID)
-        guard case .success(let receipt) = result else { return outcome(for: result) }
-        guard checks.valid(), receipt.converted == record.original else { return .failed }
-        guard switchAndRecord(record.layoutBefore, from: layout, since: startedAt) else {
+        guard switchAndRecord(record.layoutBefore, from: operation.layout,
+                              since: operation.startedAt, diagnostics: operation.diagnostics) else {
             return .partiallyUndone(targetLayout: record.layoutBefore)
         }
         return .undone
@@ -268,9 +284,24 @@ public final class Converter {
 
     /// Полный успех требует подтверждения адаптера и текущего источника.
     /// Уже подходящая раскладка не требует новой команды и не создаёт окно коррекции Unicode.
-    private func switchAndRecord(_ target: Layout, from source: Layout, since startedAt: UInt64) -> Bool {
-        if source == target, currentLayout() == target { return true }
-        guard switchLayout(target), currentLayout() == target else { return false }
+    private func switchAndRecord(
+        _ target: Layout, from source: Layout, since startedAt: UInt64, diagnostics: ConversionDiagnostics
+    ) -> Bool {
+        if source == target {
+            let observed = currentLayout()
+            diagnostics.recordLayoutObservation(stage: .alreadyTarget, accepted: nil, observed: observed)
+            if observed == target {
+                diagnostics.mark(.layoutConfirmed)
+                return true
+            }
+        }
+        let accepted = switchLayout(target)
+        diagnostics.recordLayoutObservation(stage: .adapter, accepted: accepted, observed: nil)
+        guard accepted else { return diagnostics.reject(.layoutNotConfirmed) }
+        let observed = currentLayout()
+        diagnostics.recordLayoutObservation(stage: .readback, accepted: accepted, observed: observed)
+        guard observed == target else { return diagnostics.reject(.layoutNotConfirmed) }
+        diagnostics.mark(.layoutConfirmed)
         if source != target { onLayoutSwitched(source, target, startedAt) }
         return true
     }
@@ -285,21 +316,26 @@ public final class Converter {
     }
 
     private func validityCheck(
-        bundleID: String, revision started: UInt64, context: @escaping ContextCheck
+        bundleID: String, revision started: UInt64, context: @escaping ContextCheck,
+        diagnostics: ConversionDiagnostics
     ) -> ContextCheck {
         { [weak self] in
-            guard let self, self.revision == started, self.frontmostBundleID() == bundleID, context() else {
-                return false
-            }
-            return !self.inputHeld || self.isInputHoldValid()
+            guard let self else { return diagnostics.reject(.contextUnavailable) }
+            guard self.revision == started else { return diagnostics.reject(.generationChanged) }
+            guard self.frontmostBundleID() == bundleID else { return diagnostics.reject(.applicationChanged) }
+            guard context() else { return diagnostics.reject(.contextChanged) }
+            guard !self.inputHeld || self.isInputHoldValid() else { return diagnostics.reject(.holdExpired) }
+            return true
         }
     }
 
     private func perform(_ request: ConversionRequest, bundleID: String) async -> ConversionResult {
         guard request.isValid() else { return .blocked }
         if modeCache[bundleID] == .clipboard || prefersClipboard(bundleID) {
+            request.diagnostics?.mark(.engineStarted, mechanism: .clipboard)
             return await makeClipboardEngine().perform(request)
         }
+        request.diagnostics?.mark(.engineStarted, mechanism: .accessibility)
         let result = await makeAXEngine().perform(request)
         switch result {
         case .success:
@@ -307,6 +343,7 @@ public final class Converter {
             return result
         case .unavailable:
             guard request.isValid() else { return .blocked }
+            request.diagnostics?.mark(.engineStarted, mechanism: .clipboard)
             let fallback = await makeClipboardEngine().perform(request)
             if case .success = fallback { modeCache[bundleID] = .clipboard }
             return fallback
@@ -315,8 +352,44 @@ public final class Converter {
         }
     }
 
-    private func outcome(for result: ConversionResult) -> Outcome {
-        if case .blocked = result { return .blockedBySafety }
+    /// Отдельно учитываем автоматический запрос, отменённый ещё до запуска Task конвертации.
+    public func recordSkippedAutomatic(
+        triggerTimestamp: UInt64, bundleID: String?, reason: ConversionDiagnostics.Rejection
+    ) {
+        let diagnostics = makeDiagnostics(bundleID: bundleID, triggerTimestamp: triggerTimestamp, automatic: true)
+        diagnostics.reject(reason)
+        diagnostics.complete(.skipped)
+    }
+
+    private func makeDiagnostics(
+        bundleID: String?, triggerTimestamp: UInt64?, automatic: Bool
+    ) -> ConversionDiagnostics {
+        let key = bundleID ?? "unknown"
+        let attempt = (diagnosticAttempts[key] ?? 0) + 1
+        diagnosticAttempts[key] = attempt
+        return ConversionDiagnostics(
+            bundleID: bundleID, triggerTimestamp: triggerTimestamp, attempt: attempt, automatic: automatic
+        )
+    }
+
+    private func captureCheck(diagnostics: ConversionDiagnostics) -> ContextCheck? {
+        if let captureContext { return captureContext() }
+        guard let target = InputSafety.captureTarget(diagnostics: diagnostics) else { return nil }
+        return { target.isCurrent(diagnostics: diagnostics) }
+    }
+
+    private func outcome(for result: ConversionResult, diagnostics: ConversionDiagnostics) -> Outcome {
+        switch result {
+        case .blocked:
+            diagnostics.reject(.requestInvalid)
+            return .blockedBySafety
+        case .unavailable:
+            diagnostics.reject(.engineUnavailable)
+        case .failed:
+            diagnostics.reject(.textNotConfirmed)
+        case .success:
+            break
+        }
         return .failed
     }
 }

@@ -7,6 +7,7 @@ public struct ConversionRequest: Sendable {
     public let replacement: String?
     public let sourceLayout: Layout?
     public let useSelection: Bool
+    public let diagnostics: ConversionDiagnostics?
     public let beginMutation: @MainActor @Sendable () -> Bool
     public let canCleanup: @MainActor @Sendable () -> Bool
     public let isValid: @MainActor @Sendable () -> Bool
@@ -17,6 +18,7 @@ public struct ConversionRequest: Sendable {
         replacement: String? = nil,
         sourceLayout: Layout? = nil,
         useSelection: Bool = true,
+        diagnostics: ConversionDiagnostics? = nil,
         beginMutation: @escaping @MainActor @Sendable () -> Bool = { true },
         canCleanup: (@MainActor @Sendable () -> Bool)? = nil,
         isValid: @escaping @MainActor @Sendable () -> Bool = { true }
@@ -26,6 +28,7 @@ public struct ConversionRequest: Sendable {
         self.replacement = replacement
         self.sourceLayout = sourceLayout
         self.useSelection = useSelection
+        self.diagnostics = diagnostics
         self.beginMutation = beginMutation
         self.canCleanup = canCleanup ?? isValid
         self.isValid = isValid
@@ -82,14 +85,24 @@ public struct ConversionRequest: Sendable {
 
 /// Подтверждённая замена; original используется для точного отката.
 public struct ConversionReceipt: Equatable, Sendable {
+    public typealias TargetCheck = @MainActor @Sendable () -> Bool
     public let original: String
     public let converted: String
     public let trailingText: String
+    public let targetIsCurrent: TargetCheck?
 
-    public init(original: String, converted: String, trailingText: String = "") {
+    public init(
+        original: String, converted: String, trailingText: String = "", targetIsCurrent: TargetCheck? = nil
+    ) {
         self.original = original
         self.converted = converted
         self.trailingText = trailingText
+        self.targetIsCurrent = targetIsCurrent
+    }
+
+    /// Guard — runtime-контекст, а не часть значения сохранённого текста.
+    public static func == (lhs: ConversionReceipt, rhs: ConversionReceipt) -> Bool {
+        lhs.original == rhs.original && lhs.converted == rhs.converted && lhs.trailingText == rhs.trailingText
     }
 }
 

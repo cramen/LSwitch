@@ -27,6 +27,7 @@ final class ConverterFixture {
     let undoStore = UndoStore()
     let rules: AppRules
     var layout: Layout? = .english
+    var layoutReadCount = 0
     var switchedTo: [Layout] = []
     var switchSucceeds = true
     var appliesRequestedLayout = true
@@ -35,6 +36,7 @@ final class ConverterFixture {
     var transitions: [Transition] = []
     var holdAllowed = true
     var holdActive = false
+    var drainHandler: () async -> Void = {}
     var actions: [String] = []
     var bundleID: String? = "com.example.TextEdit"
     var safe = true
@@ -47,7 +49,10 @@ final class ConverterFixture {
     }
 
     lazy var converter = Converter(
-        currentLayout: { [weak self] in self?.layout },
+        currentLayout: { [weak self] in
+            self?.layoutReadCount += 1
+            return self?.layout
+        },
         switchLayout: { [weak self] target in
             guard let self else { return false }
             self.actions.append("layout")
@@ -76,6 +81,7 @@ final class ConverterFixture {
             self?.holdActive = false
         },
         isInputHoldValid: { [weak self] in self?.holdActive == true },
+        drainPendingInput: { [weak self] in await self?.drainHandler() },
         onLayoutSwitched: { [weak self] source, target, startedAt in
             self?.actions.append("record")
             self?.transitions.append(Transition(source: source, target: target, startedAt: startedAt))

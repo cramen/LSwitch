@@ -259,7 +259,7 @@ private final class PasteboardConversionEditor {
                     return true
                 }
             ) },
-            capture: { PasteboardService.capture(from: self.board) },
+            capture: { .captured(PasteboardService.capture(from: self.board), changeCount: self.board.changeCount) },
             restore: { PasteboardService.restore($0, to: self.board) },
             changeCount: { self.board.changeCount },
             string: { self.board.string(forType: .string) },
@@ -271,7 +271,7 @@ private final class PasteboardConversionEditor {
             },
             send: { _, _ in false },
             commitPaste: { select, check, valid in
-                guard select(), check(), valid(), let inserted = self.board.string(forType: .string) else {
+                guard await select(), check(), valid(), let inserted = self.board.string(forType: .string) else {
                     return .failed
                 }
                 self.text = (self.text as NSString).replacingCharacters(in: self.selection, with: inserted)

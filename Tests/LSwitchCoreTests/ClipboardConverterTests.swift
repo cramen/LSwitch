@@ -136,7 +136,9 @@ final class ClipboardConverterTests: XCTestCase {
     @MainActor
     func testNewUserClipboardAfterPasteIsNotOverwritten() async {
         let editor = ClipboardEditor(text: "ghbdtn")
-        editor.onReadState = { count in if count == 6 { editor.updateClipboard("new clipboard") } }
+        editor.onReadState = { _ in
+            if editor.commands.contains(.paste) { editor.updateClipboard("new clipboard") }
+        }
         let result = await editor.converter().perform(ConversionRequest(expectedWord: "ghbdtn"))
         XCTAssertEqual(result, .success(ConversionReceipt(original: "ghbdtn", converted: "привет")))
         XCTAssertEqual(editor.clipboard, "new clipboard")
@@ -188,8 +190,8 @@ final class ClipboardConverterTests: XCTestCase {
 
 extension ClipboardConverterTests {
     @MainActor
-    func testCommandsCarryLatinUnicodeAndCommandTransitions() async throws {
-        for (command, expected) in [(ClipboardCommand.copy, "c"), (.paste, "v")] {
+    func testCommandsPreserveNativeUnicodeAndCommandTransitions() async throws {
+        for (command, code) in [(ClipboardCommand.copy, CGKeyCode(0x08)), (.paste, CGKeyCode(0x09))] {
             let events = try XCTUnwrap(KeyboardEmitter.events(for: command))
             XCTAssertEqual(events.map(\.type), [.flagsChanged, .keyDown, .keyUp, .flagsChanged])
             XCTAssertEqual(events.first?.flags, .maskCommand)
@@ -198,13 +200,25 @@ extension ClipboardConverterTests {
                 XCTAssertTrue(SyntheticEventMarker.isSynthetic(event))
             }
             for event in events.filter({ $0.type == .keyDown || $0.type == .keyUp }) {
-                var units = [UniChar](repeating: 0, count: 8)
-                var length = 0
-                event.keyboardGetUnicodeString(maxStringLength: 8, actualStringLength: &length, unicodeString: &units)
-                XCTAssertEqual(String(decoding: units.prefix(length), as: UTF16.self), expected)
+                // Эталон создаётся в текущей раскладке; тест не переключает TIS и ничего не отправляет.
+                let native = try XCTUnwrap(CGEvent(
+                    keyboardEventSource: CGEventSource(stateID: .hidSystemState),
+                    virtualKey: code, keyDown: event.type == .keyDown
+                ))
+                native.flags = .maskCommand
+                XCTAssertEqual(Self.unicodeUnits(event), Self.unicodeUnits(native))
+                XCTAssertEqual(event.getIntegerValueField(.keyboardEventKeycode), Int64(code))
                 XCTAssertEqual(event.flags, .maskCommand)
             }
         }
+    }
+
+    private static func unicodeUnits(_ event: CGEvent) -> [UniChar] {
+        var length = 0
+        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
+        var units = [UniChar](repeating: 0, count: length)
+        event.keyboardGetUnicodeString(maxStringLength: length, actualStringLength: &length, unicodeString: &units)
+        return Array(units.prefix(length))
     }
 
     @MainActor
@@ -244,7 +258,7 @@ extension ClipboardConverterTests {
         let result = await editor.converter().perform(ConversionRequest(expectedWord: "ghbdtn", trailingText: " "))
         XCTAssertEqual(result, .success(ConversionReceipt(original: "ghbdtn", converted: "привет", trailingText: " ")))
         XCTAssertEqual(editor.text, "🙂 привет ")
-        XCTAssertEqual(editor.sleepDelays, [0.02])
+        XCTAssertEqual(editor.sleepDelays, [0.02, 0.02, 0.02])
         XCTAssertEqual(editor.clipboard, "clipboard before")
     }
 
@@ -274,12 +288,15 @@ extension ClipboardConverterTests {
     func testDeferredPasteAcknowledgementUsesShortPoll() async {
         let editor = ClipboardEditor(text: "ghbdtn")
         editor.deferredPaste = true
-        editor.onSleep = { count in
-            if count == 2, let pending = editor.pendingPaste { editor.type(pending) }
+        editor.onSleep = { _ in
+            if let pending = editor.pendingPaste {
+                editor.pendingPaste = nil
+                editor.type(pending)
+            }
         }
         let result = await editor.converter().perform(ConversionRequest(expectedWord: "ghbdtn"))
         XCTAssertEqual(result, .success(ConversionReceipt(original: "ghbdtn", converted: "привет")))
-        XCTAssertEqual(editor.sleepDelays, [0.02, 0.02])
+        XCTAssertEqual(editor.sleepDelays, [0.02, 0.02, 0.02, 0.02])
     }
 
     @MainActor
@@ -301,7 +318,7 @@ extension ClipboardConverterTests {
         let result = await editor.converter().perform(ConversionRequest(expectedWord: "ghbdtn"))
         XCTAssertEqual(result, .failed)
         XCTAssertEqual(editor.commands, [.paste])
-        XCTAssertEqual(editor.sleepDelays, [0.02, 0.02, 0.02, 0.02])
+        XCTAssertEqual(editor.sleepDelays, Array(repeating: 0.02, count: 6))
     }
 }
 

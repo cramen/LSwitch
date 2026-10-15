@@ -25,6 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let layoutManager = LayoutManager()
     private let undoStore = UndoStore()
     private let permGuard = PermGuard()
+    private let soundFeedback = SoundFeedbackController()
     private let keystrokeBuffer = KeystrokeBuffer()
     private let classifier = KeystrokeClassifier()
     private lazy var autoSwitch = AutoSwitchCoordinator(
@@ -37,6 +38,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var converter = makeConverter()
     private var inputGeneration: UInt64 = 0
     private var interceptionGeneration: UInt64 = 0
+    #if DEBUG
+    private var diagnosticsSession: DiagnosticsSession?
+    #endif
 
     private var workspaceObserver: NSObjectProtocol?
     private var cancellables: Set<AnyCancellable> = []
@@ -46,10 +50,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        do {
+            diagnosticsSession = try DiagnosticsSession.from(arguments: CommandLine.arguments)
+        } catch {
+            logger.error("Не удалось начать диагностику: \(error.localizedDescription, privacy: .public)")
+        }
+        #endif
         setupStatusItem()
         setupPermGuard()
         observeWorkspace()
         requestPermissionsIfNeeded()
+        let prepared = DictionaryStore.shared.prewarm()
+        if !prepared.isReady { logger.error("Словари недоступны для автоматической конвертации") }
+        settings.$soundEnabled.sink { [soundFeedback] enabled in
+            soundFeedback.setEnabled(enabled)
+        }.store(in: &cancellables)
         startInterception()
         // Окно отката следует за настройкой (spec settings).
         settings.$undoWindowSeconds
@@ -67,6 +83,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logger.info("TIS источники: \(self.layoutManager.enabledSourceIDs())")
     }
 
+    func applicationWillTerminate(_ notification: Notification) {
+        stopInterception()
+        soundFeedback.shutdown()
+        #if DEBUG
+        diagnosticsSession?.finish()
+        #endif
+    }
+
     /// Повторное открытие menu-bar приложения даёт доступ к его настройкам.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         openSettings()
@@ -81,21 +105,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let generation = interceptionGeneration
         let tap = EventTapCore { [weak self] raw in
             DispatchQueue.main.async {
-                guard let self, self.interceptionGeneration == generation, self.eventTap != nil else { return }
+                guard let self, self.interceptionGeneration == generation,
+                      self.eventTap?.acceptsForProcessing(raw) == true else { return }
                 self.handleIntercepted(raw)
             }
         }
+        tap.onRecoveryStarted = { [weak self] _ in self?.resetInputContext() }
+        #if DEBUG
+        diagnosticsSession?.attach(tap)
+        #endif
         guard tap.start() else {
             logger.error("Event tap не запущен — нет разрешений?")
             return
         }
         eventTap = tap
+        #if DEBUG
+        diagnosticsSession?.sample(reason: "tapStarted")
+        #endif
     }
 
     private func stopInterception() {
         interceptionGeneration &+= 1
         resetInputContext()
         eventTap?.stop()
+        #if DEBUG
+        diagnosticsSession?.detach()
+        #endif
         eventTap = nil
     }
 
@@ -115,7 +150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let generation = inputGeneration
             Task { [converter, autoSwitch] in
                 guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
-                let outcome = await converter.trigger(expectedWord: word.isEmpty ? nil : word)
+                let outcome = await converter.trigger(
+                    expectedWord: word.isEmpty ? nil : word, triggerTimestamp: raw.timestamp
+                )
                 switch outcome {
                 case .undone, .partiallyUndone:
                     // Откат автоконвертации — сигнал обучения (design D4).
@@ -141,7 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Триггер: разделители И пунктуация с маппингом («ghbdtn,» —
             // запятая и разделитель, и триггер; TZ.md F10).
             if settings.autoSwitchEnabled, isAutoSwitchTrigger(kind) {
-                maybeAutoConvert(target: target)
+                maybeAutoConvert(target: target, triggerTimestamp: raw.timestamp)
             }
         }
     }
@@ -160,15 +197,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Автопереключение: разделитель набран, проверяем последнее слово.
     /// Запрос содержит всё от начала слова до текущей каретки.
-    private func maybeAutoConvert(target: InputTarget) {
-        guard let context = keystrokeBuffer.lastWordContextForAutoSwitch(),
-              autoSwitch.evaluate(word: context.word) != nil else { return }
+    private func maybeAutoConvert(target: InputTarget, triggerTimestamp: UInt64) {
+        guard let bufferedContext = keystrokeBuffer.lastWordContextForAutoSwitch(),
+              let context = autoSwitch.evaluate(context: bufferedContext) else { return }
         logger.notice("Автоконвертация слова длиной \(context.word.count)")
         let generation = inputGeneration
+        let bundleID = currentFrontmostBundleID()
         Task { [converter, autoSwitch] in
-            guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
+            let rejection: ConversionDiagnostics.Rejection?
+            if !self.settings.enabled { rejection = .rules }
+            else if self.inputGeneration != generation { rejection = .generationChanged }
+            else if self.currentFrontmostBundleID() != bundleID { rejection = .applicationChanged }
+            else { rejection = target.invalidationReason }
+            if let rejection {
+                converter.recordSkippedAutomatic(
+                    triggerTimestamp: triggerTimestamp, bundleID: bundleID, reason: rejection
+                )
+                return
+            }
             let outcome = await converter.trigger(
-                expectedWord: context.word, trailingText: context.trailingText, allowUndo: false
+                expectedWord: context.word, trailingText: context.trailingText, allowUndo: false,
+                triggerTimestamp: triggerTimestamp
             )
             switch outcome {
             case .converted, .partiallyConverted:
@@ -202,9 +251,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appRules: appRules,
             undoStore: undoStore,
             frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
-            prefersClipboard: { [appProfiles] in appProfiles.prefersClipboard(bundleID: $0) },
+            prefersClipboard: { [appProfiles] in
+                AcceptanceOptions.prefersClipboard(defaultValue: appProfiles.prefersClipboard(bundleID: $0))
+            },
             makeAXEngine: { AXConversionEngine() },
-            makeClipboardEngine: { ClipboardConversionEngine() },
+            makeClipboardEngine: { AcceptanceOptions.makeClipboardEngine() },
             beginInputHold: { [weak self] in
                 guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
                 self.inputHoldingTap = tap
@@ -215,14 +266,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.inputHoldingTap = nil
             },
             isInputHoldValid: { [weak self] in self?.inputHoldingTap?.isInputHeld == true },
+            drainPendingInput: { [weak self] in await self?.inputHoldingTap?.drainPendingEvents() },
             onLayoutSwitched: { [weak self] source, target, startedAt in
                 self?.eventTap?.recordLayoutChange(from: source, to: target, since: startedAt)
             },
             onConverted: { [weak self] in
                 guard let self, self.settings.soundEnabled else { return }
-                DispatchQueue.main.async {
-                    NSSound(named: NSSound.Name("Tink"))?.play()
-                }
+                self.soundFeedback.conversionSucceeded()
             }
         )
     }
@@ -304,6 +354,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+if MainActor.assumeIsolated({ PasteboardCaptureHelper.runIfRequested(arguments: CommandLine.arguments) }) {
+    exit(0)
+}
+
 if CommandLine.arguments.contains("--verify-resources") {
     let dictionaries = DictionaryStore()
     let available = dictionaries.contains("привет", language: .russian)
@@ -315,6 +369,10 @@ if CommandLine.arguments.contains("--verify-resources") {
 
 if CommandLine.arguments.contains("--probe") {
     Probe.run()
+}
+
+if let status = MainActor.assumeIsolated({ AcceptanceProbe.runIfRequested(arguments: CommandLine.arguments) }) {
+    exit(status)
 }
 
 MainActor.assumeIsolated {

@@ -14,23 +14,43 @@ public struct InputTarget {
         self.applicationPID = applicationPID
     }
 
-    public func isCurrent() -> Bool {
-        guard !IsSecureEventInputEnabled(),
-              NSWorkspace.shared.frontmostApplication?.processIdentifier == applicationPID,
-              let current = AXTextConverter().focusedElement(),
-              CFEqual(element, current), !InputSafety.isProtected(current) else { return false }
-        return true
+    public var invalidationReason: ConversionDiagnostics.Rejection? {
+        if IsSecureEventInputEnabled() { return .secureInput }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == applicationPID else {
+            return .applicationChanged
+        }
+        guard let current = AXTextConverter().focusedElement() else { return .focusedElementUnavailable }
+        guard CFEqual(element, current) else { return .focusedElementChanged }
+        return InputSafety.isProtected(current) ? .protectedField : nil
+    }
+
+    public func isCurrent(diagnostics: ConversionDiagnostics? = nil) -> Bool {
+        guard let reason = invalidationReason else { return true }
+        diagnostics?.reject(reason)
+        return false
     }
 }
 
 /// Проверяется до чтения текста и до любого взаимодействия с clipboard.
 @MainActor
 public enum InputSafety {
-    public static func captureTarget() -> InputTarget? {
-        guard !IsSecureEventInputEnabled(),
-              let application = NSWorkspace.shared.frontmostApplication,
-              let element = AXTextConverter().focusedElement(),
-              !isProtected(element) else { return nil }
+    public static func captureTarget(diagnostics: ConversionDiagnostics? = nil) -> InputTarget? {
+        guard !IsSecureEventInputEnabled() else {
+            diagnostics?.reject(.secureInput)
+            return nil
+        }
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+            diagnostics?.reject(.applicationChanged)
+            return nil
+        }
+        guard let element = AXTextConverter().focusedElement() else {
+            diagnostics?.reject(.focusedElementUnavailable)
+            return nil
+        }
+        guard !isProtected(element) else {
+            diagnostics?.reject(.protectedField)
+            return nil
+        }
         return InputTarget(element: element, applicationPID: application.processIdentifier)
     }
 

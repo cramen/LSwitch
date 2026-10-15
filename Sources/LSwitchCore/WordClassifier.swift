@@ -1,4 +1,6 @@
+import Dispatch
 import Foundation
+import os
 
 /// Словарный классификатор + эвристики F11 (spec auto-classification,
 /// design D2).
@@ -7,7 +9,8 @@ import Foundation
 /// отображения в другую раскладку есть в словаре другого языка, а само
 /// слово отсутствует в словаре текущего. Слова вне словарей и омографы
 /// (есть в обоих) не трогаем.
-public struct WordClassifier: Sendable {
+public struct WordClassifier {
+    private static let logger = Logger(subsystem: "LSwitch", category: "Classification")
 
     public enum Verdict: Equatable, Sendable {
         /// Слово набрано в неправильной раскладке, конвертировать.
@@ -34,6 +37,25 @@ public struct WordClassifier: Sendable {
     }
 
     public func verdict(for word: String) -> Verdict {
+        let cold = !dictionaries.isPrepared
+        let started = DispatchTime.now().uptimeNanoseconds
+        if cold { Self.logger.notice("classification phase=verdictBegin cold=true") }
+        let result = classify(word)
+        if cold {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started
+            let category: String
+            switch result {
+            case .wrongLayout: category = "wrongLayout"
+            case .correct: category = "correct"
+            case .blockedByHeuristics: category = "blockedByHeuristics"
+            }
+            Self.logger.notice("classification phase=verdictEnd cold=true elapsed_ns=\(elapsed, privacy: .public)")
+            Self.logger.notice("classification category=\(category, privacy: .public)")
+        }
+        return result
+    }
+
+    private func classify(_ word: String) -> Verdict {
         guard Self.passesHeuristics(word), !personalDictionary.contains(word) else {
             return .blockedByHeuristics
         }

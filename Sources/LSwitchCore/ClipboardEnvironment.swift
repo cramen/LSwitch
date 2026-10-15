@@ -6,36 +6,45 @@ import Foundation
 @MainActor
 struct ClipboardEnvironment {
     typealias TextState = (text: String, selection: NSRange)
+    enum SelectionMethod { case accessibility, keyboard }
 
     struct Context {
         var isValid: () -> Bool
         var selectedText: () -> String?
         var readState: () -> TextState? = { nil }
         var setSelection: (NSRange) -> Bool = { _ in false }
+        var safetyFailure: (() -> ConversionDiagnostics.Rejection?)?
+        var automaticContext: () -> AutomaticTextContext = { .prose }
+        var documentIdentity: @MainActor @Sendable () -> String? = { nil }
+        var selectionMethod: SelectionMethod = .accessibility
     }
 
     var captureContext: () -> Context?
     var prepare: (@escaping @MainActor () -> Bool) -> Void = { _ in }
-    var capture: () -> PasteboardSnapshot
+    var capture: () async -> PasteboardCaptureResult
     var restore: (PasteboardSnapshot) -> Void
     var changeCount: () -> Int
     var string: () -> String?
     var write: (String) -> (succeeded: Bool, changeCount: Int)
     var send: (ClipboardCommand, @escaping @MainActor () -> Bool) async -> Bool
     var commitPaste: (
-        @escaping @MainActor () -> Bool, @escaping @MainActor () -> Bool, @escaping @MainActor () -> Bool
-    ) -> MenuCommand.Outcome = { _, _, _ in .unavailable }
+        @escaping @MainActor () async -> Bool, @escaping @MainActor () -> Bool, @escaping @MainActor () -> Bool
+    ) async -> MenuCommand.Outcome = { _, _, _ in .unavailable }
     var sleep: (TimeInterval) async -> Void
+    var settlementPause: (() async -> Void)?
+    var waitForPendingInput: () async -> Void = {}
+    var bindDiagnostics: (ConversionDiagnostics?) -> Void = { _ in }
 
-    static func live(pasteboard: NSPasteboard) -> ClipboardEnvironment {
-        ClipboardEnvironment(
+    static func live(pasteboard: NSPasteboard, keyboardOnly: Bool = false) -> ClipboardEnvironment {
+        let binding = ClipboardDiagnosticsBinding()
+        let transport = makeTransport(forceKeyboard: keyboardOnly, diagnostics: binding)
+        return ClipboardEnvironment(
             captureContext: { makeContext() },
-            prepare: { isValid in
-                guard isValid(),
-                      let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return }
-                MenuCommand.prepare(targetPID: targetPID, isValid: isValid)
+            prepare: { transport.prepare(isValid: $0) },
+            capture: {
+                await PasteboardCaptureWorker.shared.capture(named: pasteboard.name.rawValue,
+                                                             diagnostics: binding.diagnostics)
             },
-            capture: { PasteboardService.capture(from: pasteboard) },
             restore: { PasteboardService.restore($0, to: pasteboard) },
             changeCount: { pasteboard.changeCount },
             string: { pasteboard.string(forType: .string) },
@@ -43,38 +52,56 @@ struct ClipboardEnvironment {
                 let ownedCount = pasteboard.clearContents()
                 return (pasteboard.setString($0, forType: .string), ownedCount)
             },
-            send: { command, isValid in
-                guard isValid(),
-                      let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return false }
-                switch MenuCommand.invoke(command, targetPID: targetPID, isValid: isValid) {
-                case .performed: return isValid()
-                case .failed: return false
-                case .unavailable:
-                    return await KeyboardEmitter.send(command, targetPID: targetPID, isValid: isValid)
-                }
+            send: { await transport.send($0, isValid: $1) },
+            commitPaste: { select, check, isValid in
+                await transport.commitPaste(select: select, check: check, isValid: isValid)
             },
-            commitPaste: { select, check, isValid in commit(select: select, check: check, isValid: isValid) },
             sleep: { delay in
                 guard delay > 0 else { return }
                 try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
-            }
+            },
+            settlementPause: { await SelectionSettlement.pause() },
+            waitForPendingInput: { await Self.drainMainQueue() },
+            bindDiagnostics: { binding.diagnostics = $0 }
         )
     }
 
-    private static func commit(
-        select: @escaping @MainActor () -> Bool,
-        check: @escaping @MainActor () -> Bool,
-        isValid: @escaping @MainActor () -> Bool
-    ) -> MenuCommand.Outcome {
-        guard isValid(),
-              let targetPID = NSWorkspace.shared.frontmostApplication?.processIdentifier else { return .failed }
-        return MenuCommand.pasteAfterSelection(
-            targetPID: targetPID, select: select, afterSelectionCheck: check, isValid: isValid
+    static func drainMainQueue() async {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.main.async { continuation.resume() }
+        }
+    }
+
+    private static func makeTransport(
+        forceKeyboard: Bool, diagnostics: ClipboardDiagnosticsBinding
+    ) -> ClipboardCommandTransport {
+        ClipboardCommandTransport(
+            forceKeyboard: forceKeyboard,
+            currentTarget: {
+                guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
+                return .init(processID: application.processIdentifier, bundleID: application.bundleIdentifier)
+            },
+            prepareMenu: { MenuCommand.prepare(targetPID: $0, isValid: $1) },
+            invokeMenu: { MenuCommand.invoke($0, targetPID: $1, isValid: $2) },
+            commitMenu: { targetPID, select, check, isValid in
+                await MenuCommand.pasteAfterSelection(
+                    targetPID: targetPID, select: select, afterSelectionCheck: check, isValid: isValid
+                )
+            },
+            sendKeyboard: { command, targetPID, isValid, beforeKeyDown in
+                await KeyboardEmitter.send(
+                    command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
+                    observer: { diagnostics.mark($0) }
+                )
+            }
         )
     }
 
     private static func makeContext() -> Context? {
         guard let target = InputSafety.captureTarget() else { return nil }
+        let keyboardSelection = AppProfiles.prefersKeyboardSelection(
+            bundleID: NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        )
         return Context(isValid: { target.isCurrent() }, selectedText: {
             guard target.isCurrent() else { return nil }
             var value: CFTypeRef?
@@ -89,7 +116,15 @@ struct ClipboardEnvironment {
             let access = SystemAXTextAccess()
             guard target.isCurrent(), access.canSetSelection(in: target.element) else { return false }
             return access.setSelection(range, in: target.element) && target.isCurrent()
-        })
+        }, safetyFailure: { target.invalidationReason }, automaticContext: {
+            guard target.isCurrent() else { return .unknown }
+            let context = SystemAutomaticTextContext.read(in: target.element)
+            return target.isCurrent() ? context : .unknown
+        }, documentIdentity: {
+            guard target.isCurrent() else { return nil }
+            let identity = SystemAutomaticTextContext.documentIdentity(in: target.element)
+            return target.isCurrent() ? identity : nil
+        }, selectionMethod: keyboardSelection ? .keyboard : .accessibility)
     }
 
     private static func readState(of element: AXUIElement) -> TextState? {
@@ -107,5 +142,22 @@ struct ClipboardEnvironment {
         let result = NSRange(location: range.location, length: range.length)
         guard Range(result, in: text) != nil else { return nil }
         return (text, result)
+    }
+}
+
+/// Один converter выполняет только одну транзакцию; binding снимается в defer run().
+@MainActor
+private final class ClipboardDiagnosticsBinding {
+    weak var diagnostics: ConversionDiagnostics?
+
+    func mark(_ phase: KeyboardEmitter.Phase) {
+        let mapped: ConversionDiagnostics.Phase
+        switch phase {
+        case .started: mapped = .keyboardCommandStarted
+        case .commandDown: mapped = .keyboardCommandDown
+        case .keyDown: mapped = .keyboardKeyDown
+        case .returned: mapped = .keyboardCommandReturned
+        }
+        diagnostics?.mark(mapped)
     }
 }

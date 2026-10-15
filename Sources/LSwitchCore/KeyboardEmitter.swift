@@ -11,45 +11,97 @@ enum ClipboardCommand: Equatable {
     case collapseSelection
 }
 
-/// Модификатор команды посылается отдельными flagsChanged, а Unicode клавиши
-/// остаётся латинским. Electron иначе может трактовать Cmd+С в RU как обычный ввод.
+/// Все модификаторы имеют парные flagsChanged; Unicode остаётся нативным для CGEvent.
+/// Подмена Unicode физического Cmd+C нарушала Copy в Chrome при русской раскладке.
 enum KeyboardEmitter {
+    enum Phase: Equatable { case started, commandDown, keyDown, returned }
+
     private static let logger = Logger(subsystem: "LSwitch", category: "Keyboard")
+
+    @MainActor
+    struct Delivery {
+        var post: (CGEvent, pid_t) -> Void
+        var pause: () async -> Void
+    }
 
     @MainActor
     static func send(
         _ command: ClipboardCommand,
         targetPID: pid_t,
-        isValid: @escaping @MainActor () -> Bool
+        isValid: @escaping @MainActor () -> Bool,
+        beforeKeyDown: @escaping @MainActor () -> Bool = { true },
+        observer: @escaping @MainActor (Phase) -> Void = { _ in }
     ) async -> Bool {
+        let delivery = Delivery(
+            post: { post($0, targetPID: $1) },
+            pause: { try? await Task.sleep(nanoseconds: 15_000_000) }
+        )
+        return await send(
+            command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
+            observer: observer, delivery: delivery
+        )
+    }
+
+    @MainActor
+    static func send(
+        _ command: ClipboardCommand,
+        targetPID: pid_t,
+        isValid: @escaping @MainActor () -> Bool,
+        beforeKeyDown: @escaping @MainActor () -> Bool,
+        observer: @escaping @MainActor (Phase) -> Void = { _ in },
+        delivery: Delivery
+    ) async -> Bool {
+        observer(.started)
+        defer { observer(.returned) }
         guard targetPID > 0, isValid(), let events = events(for: command) else { return false }
+        #if DEBUG
+        CommandUnicodeDiagnostics.record(command: command, events: events)
+        #endif
         logger.info("transport=pid targetPID=\(targetPID, privacy: .public)")
         let paced = command == .copy || command == .paste
         if !paced {
-            for event in events { post(event, targetPID: targetPID) }
+            for event in events { delivery.post(event, targetPID) }
             return isValid()
         }
-        var keyPressed = false
-        var modifierPressed = false
-        defer {
-            // При смене контекста не посылаем следующий keyDown. Уже нажатые
-            // собственные клавиши отпускаем, иначе Command может «залипнуть».
-            if keyPressed, let release = events.first(where: { $0.type == .keyUp }) {
-                post(release, targetPID: targetPID)
-            }
-            if modifierPressed, let release = events.last { post(release, targetPID: targetPID) }
-        }
+        var pressed = PressedKeys()
+        defer { pressed.release(events: events, targetPID: targetPID, delivery: delivery) }
         for event in events {
             guard isValid() else { return false }
-            post(event, targetPID: targetPID)
-            if event.type == .keyDown { keyPressed = true }
-            if event.type == .keyUp { keyPressed = false }
-            if event.type == .flagsChanged { modifierPressed = !event.flags.isEmpty }
+            if event.type == .keyDown {
+                guard beforeKeyDown(), isValid() else { return false }
+            }
+            delivery.post(event, targetPID)
+            pressed.record(event, observer: observer)
             // Интервал 15 мс проверен независимым драйвером в RU Obsidian.
             // Главный run loop должен обработать собственный event tap между событиями.
-            try? await Task.sleep(nanoseconds: 15_000_000)
+            await delivery.pause()
         }
         return isValid()
+    }
+
+    @MainActor
+    private struct PressedKeys {
+        var keyPressed = false
+        var modifierPressed = false
+
+        mutating func record(_ event: CGEvent, observer: @MainActor (Phase) -> Void) {
+            switch event.type {
+            case .keyDown: keyPressed = true; observer(.keyDown)
+            case .keyUp: keyPressed = false
+            case .flagsChanged:
+                modifierPressed = !event.flags.isEmpty
+                if modifierPressed { observer(.commandDown) }
+            default: break
+            }
+        }
+
+        func release(events: [CGEvent], targetPID: pid_t, delivery: Delivery) {
+            // При смене контекста отпускаем лишь уже отправленные собственные клавиши.
+            if keyPressed, let release = events.first(where: { $0.type == .keyUp }) {
+                delivery.post(release, targetPID)
+            }
+            if modifierPressed, let release = events.last { delivery.post(release, targetPID) }
+        }
     }
 
     /// Между событиями этого пакета нет await; ревизия MainActor не может измениться.
@@ -80,24 +132,40 @@ enum KeyboardEmitter {
         switch command {
         case .copy, .paste:
             let virtualKey: CGKeyCode = command == .copy ? 0x08 : 0x09
-            let unicode = command == .copy ? "c" : "v"
             guard let down = modifier(0x37, keyDown: true, flags: .maskCommand, source: source),
-                  let keys = key(virtualKey, flags: .maskCommand, unicode: unicode, source: source),
+                  let keys = key(virtualKey, flags: .maskCommand, source: source),
                   let release = modifier(0x37, keyDown: false, flags: [], source: source) else { return nil }
             events = [down] + keys + [release]
         case .selectCharacters(let count):
-            guard count > 0 else { return nil }
-            for _ in 0..<count {
-                guard let keys = key(0x7B, flags: .maskShift, source: source) else { return nil }
-                events += keys
-            }
+            return selection(count: count, wholeWord: false, source: source)
         case .selectWord:
-            guard let keys = key(0x7B, flags: [.maskAlternate, .maskShift], source: source) else { return nil }
-            events = keys
+            return selection(count: 1, wholeWord: true, source: source)
         case .collapseSelection:
             guard let keys = key(0x7C, flags: [], source: source) else { return nil }
             events = keys
         }
+        return events
+    }
+
+    private static func selection(count: Int, wholeWord: Bool, source: CGEventSource?) -> [CGEvent]? {
+        guard count > 0,
+              let shiftDown = modifier(0x38, keyDown: true, flags: .maskShift, source: source),
+              let shiftUp = modifier(0x38, keyDown: false, flags: [], source: source) else { return nil }
+        let flags: CGEventFlags = wholeWord ? [.maskAlternate, .maskShift] : .maskShift
+        var events = [shiftDown]
+        if wholeWord {
+            guard let optionDown = modifier(0x3A, keyDown: true, flags: flags, source: source) else { return nil }
+            events.append(optionDown)
+        }
+        for _ in 0..<count {
+            guard let keys = key(0x7B, flags: flags, source: source) else { return nil }
+            events += keys
+        }
+        if wholeWord {
+            guard let optionUp = modifier(0x3A, keyDown: false, flags: .maskShift, source: source) else { return nil }
+            events.append(optionUp)
+        }
+        events.append(shiftUp)
         return events
     }
 
@@ -119,7 +187,6 @@ enum KeyboardEmitter {
     private static func key(
         _ virtualKey: CGKeyCode,
         flags: CGEventFlags,
-        unicode: String? = nil,
         source: CGEventSource?
     ) -> [CGEvent]? {
         var result: [CGEvent] = []
@@ -128,10 +195,6 @@ enum KeyboardEmitter {
                 return nil
             }
             event.flags = flags
-            if let unicode {
-                let units = Array(unicode.utf16)
-                event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-            }
             guard SyntheticEventMarker.tag(event) else { return nil }
             result.append(event)
         }

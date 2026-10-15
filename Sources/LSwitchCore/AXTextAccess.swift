@@ -13,6 +13,14 @@ protocol AXTextAccess {
     func canSetSelection(in element: AXUIElement) -> Bool
     func replaceSelectedText(_ text: String, in element: AXUIElement) -> Bool
     func setSelection(_ range: NSRange, in element: AXUIElement) -> Bool
+    func waitForUpdate() async
+    func automaticContext(in element: AXUIElement) -> AutomaticTextContext
+    func documentIdentity(in element: AXUIElement) -> String?
+}
+
+extension AXTextAccess {
+    func automaticContext(in element: AXUIElement) -> AutomaticTextContext { .prose }
+    func documentIdentity(in element: AXUIElement) -> String? { nil }
 }
 
 @MainActor
@@ -74,6 +82,19 @@ struct SystemAXTextAccess: AXTextAccess {
         var value = CFRange(location: range.location, length: range.length)
         guard let axValue = AXValueCreate(.cfRange, &value) else { return false }
         return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, axValue) == .success
+    }
+
+    func documentIdentity(in element: AXUIElement) -> String? {
+        guard !isProtected(element) else { return nil }
+        return SystemAutomaticTextContext.documentIdentity(in: element)
+    }
+
+    func waitForUpdate() async {
+        await SelectionSettlement.pause()
+    }
+
+    func automaticContext(in element: AXUIElement) -> AutomaticTextContext {
+        SystemAutomaticTextContext.read(in: element)
     }
 
     private func attribute(_ name: String, in element: AXUIElement) -> CFTypeRef? {

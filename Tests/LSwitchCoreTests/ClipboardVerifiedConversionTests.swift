@@ -82,7 +82,7 @@ extension ClipboardConverterTests {
         let result = await editor.converter().perform(ConversionRequest(expectedWord: "ghbdtn", useSelection: false))
         XCTAssertEqual(result, .failed)
         XCTAssertEqual(editor.commands, [])
-        XCTAssertEqual(editor.rangeWrites, [NSRange(location: 0, length: 6)])
+        XCTAssertEqual(editor.rangeWrites, [NSRange(location: 0, length: 6), NSRange(location: 6, length: 0)])
         XCTAssertEqual(editor.text, "ghbdtn")
         XCTAssertEqual(editor.cursor, 6)
         XCTAssertNil(editor.selection)

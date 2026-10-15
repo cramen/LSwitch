@@ -43,7 +43,9 @@ extension ClipboardConverterTests {
     func testLeaseExpiryDuringConfirmationStillCleansSelection() async {
         let editor = ClipboardEditor(text: "ghbdtn")
         editor.keepPastedSelection = true
-        editor.onReadState = { count in if count == 6 { editor.requestValid = false } }
+        editor.onReadState = { _ in
+            if editor.commands.contains(.paste) { editor.requestValid = false }
+        }
         let result = await editor.converter().perform(ConversionRequest(
             expectedWord: "ghbdtn", useSelection: false,
             canCleanup: { true }, isValid: { editor.requestValid }

@@ -18,10 +18,13 @@ final class ClipboardTransaction {
     var pasted = false
     var existingSelection: String?
     var verifiedPlan: AXReplacementPlan?
+    var keyboardSelectionPlan: KeyboardSelectionPlan?
     var observedSelection: NSRange?
     var mutationDenied = false
     var legacySelection: String?
     var legacyState: ClipboardEnvironment.TextState?
+    var automaticContext: AutomaticTextContext?
+    var documentTargetCheck: ConversionReceipt.TargetCheck?
 
     typealias Parts = (word: String, tail: String)
 
@@ -61,18 +64,67 @@ final class ClipboardTransaction {
     }
 
     func run() async -> ConversionResult {
-        guard request.isValid(), let context = environment.captureContext(), context.isValid() else { return .blocked }
+        environment.bindDiagnostics(request.diagnostics)
+        defer { environment.bindDiagnostics(nil) }
+        guard request.isValid() else {
+            reject(.requestInvalid)
+            return .blocked
+        }
+        guard let context = environment.captureContext() else {
+            reject(.clipboardContextUnavailable)
+            return .blocked
+        }
         self.context = context
+        guard contextIsValid() else { return .blocked }
+        if !request.isAutomatic {
+            documentTargetCheck = ConversionDocumentTarget.check(identity: context.documentIdentity(),
+                                                                read: context.documentIdentity)
+            guard valid else { return .blocked }
+        }
+        request.diagnostics?.mark(.clipboardContextCaptured, mechanism: .clipboard)
+        request.diagnostics?.mark(.menuPreparationStarted)
         environment.prepare({ self.valid })
-        // Поиск меню выполняется до выделения. Пауза позволяет обработать ввод,
-        // поступивший за время поиска, и отменить устаревший запрос до первых клавиш.
+        request.diagnostics?.mark(.menuPrepared)
+        if let result = await convertReadySnapshot(context) { return result }
+        // Не готовый снимок и ручной Copy сохраняют прежнее ограниченное ожидание.
         await environment.sleep(configuration.preCopyDelay)
+        request.diagnostics?.mark(.preparationWaitEnded)
         guard valid else { return .blocked }
+        return await convertFromContext(context)
+    }
+
+    private func convertReadySnapshot(_ context: ClipboardEnvironment.Context) async -> ConversionResult? {
+        guard configuration.allowsSnapshotPath, !request.useSelection,
+              request.replacement == nil, request.expectedSpan != nil else { return nil }
+        // Raw callbacks уже поставлены в main queue. Пропускаем их через FIFO
+        // barrier до snapshot и любой мутации, затем снова проверяем поколение.
+        await environment.waitForPendingInput()
+        request.diagnostics?.mark(.inputQueueDrained)
+        guard valid else { return .blocked }
+        guard prepareAutomaticSnapshot() else { return .blocked }
         if let state = context.readState() {
+            request.diagnostics?.mark(.snapshotRead)
+            if let plan = AXReplacementPlan(
+                text: state.text, selection: state.selection, request: request, transform: convertedWord
+            ) {
+                guard valid else { return .blocked }
+                request.diagnostics?.mark(.snapshotReadyWithoutDelay)
+                return await finish(await performVerified(plan))
+            }
+        }
+        guard valid else { return .blocked }
+        return nil
+    }
+
+    private func convertFromContext(_ context: ClipboardEnvironment.Context) async -> ConversionResult {
+        guard prepareAutomaticSnapshot() else { return .blocked }
+        if configuration.allowsSnapshotPath, let state = context.readState() {
+            request.diagnostics?.mark(.snapshotRead)
             guard let plan = AXReplacementPlan(
                 text: state.text, selection: state.selection, request: request, transform: convertedWord
             ) else {
                 logger.notice("Clipboard отказ до выделения: снимок AX не соответствует запросу")
+                reject(snapshotRejection(state))
                 return .blocked
             }
             return await finish(await performVerified(plan))
@@ -81,9 +133,10 @@ final class ClipboardTransaction {
         // Явная ручная команда и точный undo сохраняют clipboard fallback.
         guard request.useSelection || request.replacement != nil else {
             logger.notice("Clipboard auto отказ до выделения: нет AX-снимка")
+            reject(.snapshotUnavailable)
             return .blocked
         }
-        guard captureClipboard() else { return .blocked }
+        guard await captureClipboard() else { return .blocked }
         let selected = request.useSelection ? context.selectedText() : nil
         existingSelection = selected.flatMap { $0.isEmpty ? nil : $0 }
         guard beginMutationIfValid() else { return .blocked }
@@ -100,12 +153,43 @@ final class ClipboardTransaction {
         return await finish(result)
     }
 
+}
+
+extension ClipboardTransaction {
     var valid: Bool {
-        request.isValid() && context?.isValid() == true && !Task.isCancelled
+        guard request.isValid() else { return reject(.requestInvalid) }
+        guard !Task.isCancelled else { return reject(.cancelled) }
+        return contextIsValid()
+    }
+
+    private func snapshotRejection(_ state: ClipboardEnvironment.TextState) -> ConversionDiagnostics.Rejection {
+        if !request.useSelection && state.selection.length > 0 { return .unexpectedSelection }
+        if state.selection.length == 0, let expected = request.expectedSpan,
+           state.selection.location < expected.utf16.count { return .caretBeforeExpectedSpan }
+        return .expectedSpanMismatch
     }
 
     var cleanupAllowed: Bool {
-        request.canCleanup() && context?.isValid() == true
+        request.canCleanup() && contextIsValid()
+    }
+
+    func contextIsValid() -> Bool {
+        guard let context else { return reject(.clipboardContextUnavailable) }
+        if !request.isAutomatic, documentTargetCheck?() == false { return reject(.documentChanged) }
+        if let automaticContext, automaticContext != .prose, context.automaticContext() != automaticContext {
+            return reject(.sourceDocumentChanged)
+        }
+        if let safetyFailure = context.safetyFailure {
+            if let reason = safetyFailure() { return reject(reason) }
+            return true
+        }
+        return context.isValid() || reject(.contextChanged)
+    }
+
+    @discardableResult
+    func reject(_ reason: ConversionDiagnostics.Rejection) -> Bool {
+        request.diagnostics?.reject(reason)
+        return false
     }
 
     func rememberLegacySelection() {
@@ -154,7 +238,7 @@ final class ClipboardTransaction {
     func paste(parts: Parts) async -> ConversionResult {
         guard let plan = preparePaste(copied: parts) else { return .unavailable }
         guard valid, environment.changeCount() == ownedCount else { return .blocked }
-        let written = environment.write(plan.inserted)
+        let written = writeClipboard(plan.inserted)
         ownedCount = written.changeCount
         guard written.succeeded else { return .unavailable }
         guard environment.changeCount() == ownedCount else { return .blocked }
@@ -262,8 +346,13 @@ final class ClipboardTransaction {
             finalResult = .failed
         }
         if let snapshot, let ownedCount, environment.changeCount() == ownedCount {
+            request.diagnostics?.mark(.clipboardRestoreStarted)
             environment.restore(snapshot)
+            request.diagnostics?.mark(.clipboardRestored)
             logger.info("Снимок буфера восстановлен")
+        }
+        if case .success(let receipt) = finalResult {
+            return .success(receipt.checkingTarget(documentTargetCheck))
         }
         return finalResult
     }

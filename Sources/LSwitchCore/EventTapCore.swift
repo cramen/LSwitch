@@ -25,7 +25,7 @@ public final class EventTapCore {
     }
 
     private let handler: Handler
-    private let processingQueue = DispatchQueue(label: "lswitch.eventtap.processing")
+    private let processingQueue: DispatchQueue
     private let logger = Logger(subsystem: "LSwitch", category: "EventTap")
     private let correctionLock = NSLock()
     private var queuedInputCorrection: QueuedInputCorrection?
@@ -34,16 +34,38 @@ public final class EventTapCore {
     private var machPort: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var workspaceObservers: [NSObjectProtocol] = []
+    private var healthTimer: Timer?
+    private var lifecycleGeneration: UInt64 = 0
+    #if DEBUG
+    private var diagnosticsMetrics: EventTapMetrics?
+    #endif
     /// Сколько раз tap пересоздавался с момента запуска (диагностика спайка).
     public private(set) var recoveryCount = 0
 
     public private(set) var state: State = .stopped
+    @MainActor public var onRecoveryStarted: (UInt64) -> Void = { _ in }
+    @MainActor private var deliveryGate = EventDeliveryGate()
 
     /// - Parameter handler: вызывается на выделенной последовательной очереди
     ///   для каждого перехваченного события (включая синтетику — фильтрация
     ///   на стороне подписчика через `RawKeyEvent.isSynthetic`).
-    public init(handler: @escaping Handler) {
+    public convenience init(handler: @escaping Handler) {
+        self.init(handler: handler, processingQueue: DispatchQueue(label: "lswitch.eventtap.processing"))
+    }
+
+    init(handler: @escaping Handler, processingQueue: DispatchQueue) {
         self.handler = handler
+        self.processingQueue = processingQueue
+    }
+
+    /// После hold пропускает захваченные ранее raw-события через обе очереди потребителя.
+    @MainActor
+    public func drainPendingEvents() async {
+        await withCheckedContinuation { continuation in
+            processingQueue.async {
+                DispatchQueue.main.async { continuation.resume() }
+            }
+        }
     }
 
     public var isInputHeld: Bool { inputBuffer.isHolding }
@@ -51,9 +73,21 @@ public final class EventTapCore {
     @MainActor
     public func beginInputHold() -> Bool {
         guard state == .running,
-              let generation = inputBuffer.begin(at: DispatchTime.now().uptimeNanoseconds) else { return false }
+              let generation = inputBuffer.begin(at: DispatchTime.now().uptimeNanoseconds) else {
+            #if DEBUG
+            diagnosticsMetrics?.increment(.holdRefusals)
+            #endif
+            return false
+        }
+        #if DEBUG
+        diagnosticsMetrics?.increment(.holdGrants)
+        #endif
         processingQueue.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
-            self?.inputBuffer.expire(generation: generation, at: DispatchTime.now().uptimeNanoseconds)
+            guard let self else { return }
+            self.inputBuffer.expire(generation: generation, at: DispatchTime.now().uptimeNanoseconds)
+            #if DEBUG
+            if !self.inputBuffer.isHolding { self.diagnosticsMetrics?.invalidateHold() }
+            #endif
         }
         logger.info("Очередь ввода: начало секции замены")
         return true
@@ -76,6 +110,9 @@ public final class EventTapCore {
             // userData сохраняется, а следующие системные получатели видят исходный порядок.
             event.post(tap: .cgAnnotatedSessionEventTap)
         }
+        #if DEBUG
+        diagnosticsMetrics?.finishHold(released: delivered)
+        #endif
         if delivered > 0 { logger.info("Очередь ввода: доставлено событий \(delivered, privacy: .public)") }
     }
 
@@ -93,6 +130,7 @@ public final class EventTapCore {
     }
 
     deinit {
+        healthTimer?.invalidate()
         // Не захватываем уничтожаемый self асинхронно. Наблюдатели удаляются на main.
         let observers = workspaceObservers
         DispatchQueue.main.async {
@@ -113,14 +151,26 @@ public final class EventTapCore {
             return false
         }
         state = .running
+        lifecycleGeneration &+= 1
+        #if DEBUG
+        diagnosticsMetrics?.increment(.starts)
+        #endif
         subscribeWorkspaceNotifications()
+        startHealthChecks()
         logger.info("Event tap запущен")
         return true
     }
 
     @MainActor
     public func stop() {
+        #if DEBUG
+        if state != .stopped { diagnosticsMetrics?.increment(.stops) }
+        diagnosticsMetrics?.invalidateHold()
+        #endif
         state = .stopped
+        lifecycleGeneration &+= 1
+        healthTimer?.invalidate()
+        healthTimer = nil
         inputBuffer.cancelLease()
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
@@ -134,7 +184,9 @@ public final class EventTapCore {
         queuedInputCorrection = nil
         correctionLock.unlock()
     }
+}
 
+extension EventTapCore {
     // MARK: - Tap lifecycle
 
     private func createTap() -> Bool {
@@ -168,13 +220,28 @@ public final class EventTapCore {
 
     /// Вызывается из C-callback. Исходное событие доставляется ровно один раз,
     /// при необходимости с исправленным Unicode ожидавшей клавиши.
-    fileprivate func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+    func handleTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        #if DEBUG
+        let measuredAt = diagnosticsMetrics.map { _ in DispatchTime.now().uptimeNanoseconds }
+        defer {
+            if let measuredAt { diagnosticsMetrics?.recordCallback(startedAt: measuredAt) }
+        }
+        #endif
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            #if DEBUG
+            let notification: EventTapMetrics.Counter = type == .tapDisabledByTimeout
+                ? .timeoutNotifications : .userDisableNotifications
+            diagnosticsMetrics?.increment(notification)
+            #endif
             scheduleRecovery(reason: type == .tapDisabledByTimeout ? "timeout" : "userInput")
             return Unmanaged.passUnretained(event)
         }
 
         if inputBuffer.intercept(type: type, event: event, at: DispatchTime.now().uptimeNanoseconds) {
+            #if DEBUG
+            diagnosticsMetrics?.increment(.heldEvents)
+            if !inputBuffer.isHolding { diagnosticsMetrics?.invalidateHold() }
+            #endif
             return nil
         }
         guard state != .stopped else { return Unmanaged.passUnretained(event) }
@@ -188,10 +255,20 @@ public final class EventTapCore {
 
     private func scheduleRecovery(reason: String) {
         inputBuffer.cancelLease()
+        #if DEBUG
+        diagnosticsMetrics?.invalidateHold()
+        #endif
+        let generation = lifecycleGeneration
         DispatchQueue.main.async { [weak self] in
-            guard let self, self.state != .stopped else { return }
+            guard let self, self.state != .stopped, self.lifecycleGeneration == generation else { return }
+            let startsRecovery = self.state != .recovering
             self.state = .recovering
+            if startsRecovery { self.invalidateProcessingContextForRecovery(at: DispatchTime.now().uptimeNanoseconds) }
+            guard self.state == .recovering, self.lifecycleGeneration == generation else { return }
             self.recoveryCount += 1
+            #if DEBUG
+            self.diagnosticsMetrics?.increment(.recoveryAttempts)
+            #endif
             self.logger.notice("Event tap отключён системой (\(reason)), пересоздаём (#\(self.recoveryCount))")
             if let port = self.machPort {
                 // Быстрый путь: просто включить обратно.
@@ -200,15 +277,36 @@ public final class EventTapCore {
             if self.machPort == nil || !self.isTapAlive {
                 self.teardownTapOnly()
                 if !self.createTap() {
+                    #if DEBUG
+                    self.diagnosticsMetrics?.increment(.recoveryFailures)
+                    #endif
                     self.logger.error("Пересоздание tap не удалось, повтор через 1 с")
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                        self?.scheduleRecovery(reason: "retry")
+                        guard let self, self.lifecycleGeneration == generation else { return }
+                        self.scheduleRecovery(reason: "retry")
                     }
                     return
                 }
             }
             self.state = .running
+            #if DEBUG
+            self.diagnosticsMetrics?.increment(.recoverySuccesses)
+            #endif
         }
+    }
+
+    /// Явный tapEnable(false) может не прислать disabled callback. Проверка не зависит от ввода.
+    private func startHealthChecks() {
+        healthTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, self.state == .running, !self.isTapAlive else { return }
+            #if DEBUG
+            self.diagnosticsMetrics?.increment(.silentDisableDetections)
+            #endif
+            self.scheduleRecovery(reason: "healthCheck")
+        }
+        healthTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     private var isTapAlive: Bool {
@@ -239,7 +337,13 @@ public final class EventTapCore {
             let observer = center.addObserver(forName: name, object: nil, queue: nil) { [weak self] _ in
                 guard let self else { return }
                 DispatchQueue.main.async { [weak self] in
-                    guard let self, self.state == .running, !self.isTapAlive else { return }
+                    guard let self else { return }
+                    #if DEBUG
+                    self.diagnosticsMetrics?.increment(
+                        name == NSWorkspace.didWakeNotification ? .wakeNotifications : .sessionNotifications
+                    )
+                    #endif
+                    guard self.state == .running, !self.isTapAlive else { return }
                     self.logger.notice("Потерян tap после \(name.rawValue), пересоздаём")
                     self.scheduleRecovery(reason: name.rawValue)
                 }
@@ -248,66 +352,43 @@ public final class EventTapCore {
         }
     }
 
-    // MARK: - Извлечение события
+    #if DEBUG
+    /// Включается только явной диагностической сессией. Без неё callback не измеряет время.
+    @MainActor
+    public func enableDiagnostics() { if diagnosticsMetrics == nil { diagnosticsMetrics = EventTapMetrics() } }
 
-    /// Отделено от доставки для проверки CGEvent и снимка без отправки клавиш в UI.
-    func correctedRawEvent(type: CGEventType, event: CGEvent) -> RawKeyEvent? {
-        guard let original = Self.makeRawEvent(type: type, event: event) else { return nil }
-        correctionLock.lock()
-        let correction = queuedInputCorrection
-        correctionLock.unlock()
-        guard let correction else { return original }
-        let corrected = correction.corrected(original)
-        guard corrected.characters != original.characters else { return original }
-        let units = Array(corrected.characters.utf16)
-        event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
-        return Self.makeRawEvent(type: type, event: event)
-    }
-
-    private static func makeRawEvent(type: CGEventType, event: CGEvent) -> RawKeyEvent? {
-        let rawType: RawKeyEventType
-        switch type {
-        case .keyDown: rawType = .keyDown
-        case .keyUp: rawType = .keyUp
-        case .flagsChanged: rawType = .flagsChanged
-        case .leftMouseDown, .rightMouseDown, .otherMouseDown: rawType = .other
-        default: return nil
-        }
-
-        var length = 0
-        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &length, unicodeString: nil)
-        var characters = ""
-        if length > 0 {
-            var buffer = [UniChar](repeating: 0, count: length)
-            event.keyboardGetUnicodeString(
-                maxStringLength: length,
-                actualStringLength: &length,
-                unicodeString: &buffer
-            )
-            characters = String(utf16CodeUnits: buffer, count: length)
-        }
-
-        return RawKeyEvent(
-            type: rawType,
-            keyCode: UInt16(event.getIntegerValueField(.keyboardEventKeycode)),
-            characters: characters,
-            modifierFlags: event.flags.rawValue,
-            isSynthetic: SyntheticEventMarker.isSynthetic(event),
-            timestamp: event.timestamp
+    @MainActor
+    public func diagnosticsSnapshot() -> EventTapDiagnosticsSnapshot? {
+        diagnosticsMetrics?.snapshot(
+            state: String(describing: state), tapEnabled: isTapAlive, now: DispatchTime.now().uptimeNanoseconds
         )
     }
-}
 
-/// C-callback для CGEventTap. Извлекает EventTapCore из userInfo и делегирует.
-private func eventTapCallback(
-    proxy: CGEventTapProxy,
-    type: CGEventType,
-    event: CGEvent,
-    userInfo: UnsafeMutableRawPointer?
-) -> Unmanaged<CGEvent>? {
-    guard let userInfo else {
-        return Unmanaged.passUnretained(event)
+    /// Настоящее отключение; восстановление выполняет обычный health-check, а не этот метод.
+    @MainActor
+    @discardableResult
+    public func disableTapForDiagnostics() -> Bool {
+        guard diagnosticsMetrics != nil, state == .running, let machPort, isTapAlive else { return false }
+        CGEvent.tapEnable(tap: machPort, enable: false)
+        let disabled = !CGEvent.tapIsEnabled(tap: machPort)
+        if disabled { diagnosticsMetrics?.increment(.forcedDisables) }
+        return disabled
     }
-    let core = Unmanaged<EventTapCore>.fromOpaque(userInfo).takeUnretainedValue()
-    return core.handleTapEvent(type: type, event: event)
+    #endif
+
+    /// Проверяется потребителем на main непосредственно перед обработкой, а не до async-перехода.
+    @MainActor
+    public func acceptsForProcessing(_ event: RawKeyEvent) -> Bool { deliveryGate.accepts(timestamp: event.timestamp) }
+
+    @MainActor
+    func invalidateProcessingContextForRecovery(at timestamp: UInt64) {
+        deliveryGate.reset(at: timestamp)
+        onRecoveryStarted(deliveryGate.cutoff)
+    }
+
+    var currentInputCorrection: QueuedInputCorrection? {
+        correctionLock.lock()
+        defer { correctionLock.unlock() }
+        return queuedInputCorrection
+    }
 }

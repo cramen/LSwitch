@@ -8,45 +8,65 @@ import Foundation
 /// Инвариант clipboard-режима: после конвертации буфер бит-в-бит идентичен
 /// исходному. Идентичность проверяется fingerprint'ом — SHA-256 по
 /// `type + data` каждого элемента.
-public struct PasteboardSnapshot: Equatable {
+public struct PasteboardSnapshot: Equatable, Codable, Sendable {
 
-    public struct Item: Equatable {
-        /// Данные по `NSPasteboard.PasteboardType.rawValue`. Тип без данных
-        /// (ленивый promise) фиксируется с `nil` — восстановить его можно
-        /// только декларацией типа без содержимого.
+    public struct Item: Equatable, Codable, Sendable {
+        /// Тип без данных фиксируется как существующий ключ с nil, а не удаляется.
+        /// Такой снимок нельзя восстановить без исходного поставщика.
         public var dataByType: [String: Data?]
     }
 
     public let items: [Item]
+    public let containsFilePromises: Bool
+
+    public init(items: [Item], containsFilePromises: Bool = false) {
+        self.items = items
+        self.containsFilePromises = containsFilePromises
+    }
+
+    /// Только материализованные Data без известных file-promise контрактов можно переопубликовать.
+    public var isRestorable: Bool {
+        !containsFilePromises && items.allSatisfy { item in
+            item.dataByType.values.allSatisfy { $0 != nil }
+        }
+    }
 }
 
 public enum PasteboardService {
 
     public static func capture(from pasteboard: NSPasteboard) -> PasteboardSnapshot {
-        let items = (pasteboard.pasteboardItems ?? []).map { item -> PasteboardSnapshot.Item in
+        let promiseTypes = Set(NSFilePromiseReceiver.readableDraggedTypes)
+        let pasteboardItems = pasteboard.pasteboardItems ?? []
+        let declaredTypes = pasteboardItems.map(\.types)
+        let containsFilePromises = declaredTypes.contains { types in
+            types.contains { promiseTypes.contains($0.rawValue) }
+        }
+        let items = zip(pasteboardItems, declaredTypes).map { item, types -> PasteboardSnapshot.Item in
             var dataByType: [String: Data?] = [:]
-            for type in item.types {
-                dataByType[type.rawValue] = item.data(forType: type)
+            for type in types {
+                // Отказываем до data() любого item, а не после материализации promise.
+                dataByType[type.rawValue] = .some(containsFilePromises ? nil : item.data(forType: type))
             }
             return PasteboardSnapshot.Item(dataByType: dataByType)
         }
-        return PasteboardSnapshot(items: items)
+        return PasteboardSnapshot(items: items, containsFilePromises: containsFilePromises)
     }
 
-    public static func restore(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) {
-        pasteboard.clearContents()
+    /// Невосстановимое обещание не превращается в пустую строку и не уничтожает текущий clipboard.
+    @discardableResult
+    public static func restore(_ snapshot: PasteboardSnapshot, to pasteboard: NSPasteboard) -> Bool {
+        guard snapshot.isRestorable else { return false }
+        var items: [NSPasteboardItem] = []
         for snapshotItem in snapshot.items {
             let item = NSPasteboardItem()
             for (rawType, data) in snapshotItem.dataByType {
                 let type = NSPasteboard.PasteboardType(rawValue: rawType)
-                if let data {
-                    item.setData(data, forType: type)
-                } else {
-                    item.setString("", forType: type)
-                }
+                guard let data, item.setData(data, forType: type) else { return false }
             }
-            pasteboard.writeObjects([item])
+            items.append(item)
         }
+        pasteboard.clearContents()
+        return items.isEmpty || pasteboard.writeObjects(items)
     }
 
     /// SHA-256 по однозначно разделённым полям снимка. Длины отделяют type от data,
