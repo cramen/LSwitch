@@ -149,7 +149,7 @@ final class UnicodeTestEditor {
         }
     }
 
-    func snapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
+    func snapshot(canReadText: UnicodeEnvironment.TextReadPermission) -> UnicodeTextSnapshot? {
         reads += 1
         afterMetadataRead?()
         guard canReadText() else { return nil }

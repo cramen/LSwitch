@@ -1,9 +1,10 @@
 import Foundation
 
 extension UnicodeEnvironment {
+    typealias TextReadPermission = @MainActor () -> Bool
+
     /// Raw getters доступны только проверяемой границе в этом файле.
     struct Context {
-        typealias TextReadPermission = @MainActor () -> Bool
         fileprivate let processID: pid_t
         fileprivate let isCurrent: @MainActor @Sendable () -> Bool
         fileprivate let rawSnapshot: @MainActor (TextReadPermission) -> UnicodeTextSnapshot?

@@ -11,7 +11,8 @@ CGEvent-драйвером только в отдельных тестовых �
 
 | Набор | Подтверждение | Граница доказательства |
 | --- | --- | --- |
-| Последний опубликованный проверенный код | `main`, коммит `2abf560`; [CI](https://github.com/cramen/LSwitch/actions/runs/38734859621) | Build, 489 тестов без ошибок/пропусков, SwiftLint strict: 0 нарушений в 143 файлах; последующие изменения 503–513 не покрыты этим CI |
+| Последний полностью зелёный CI до текущей проверки | `main`, коммит `2abf560`; [CI](https://github.com/cramen/LSwitch/actions/runs/38734859621) | Build, 489 тестов без ошибок/пропусков, SwiftLint strict: 0 нарушений в 143 файлах; последующие изменения 503–513 не покрыты этим CI |
+| Checkpoint 513b | `26eb06b`; [CI](https://github.com/cramen/LSwitch/actions/runs/38754968717) | Build и 513 тестов без ошибок/пропусков прошли; SwiftLint нашёл одно нарушение nesting у typealias. Перенос alias на уровень UnicodeEnvironment сохраняет поведение; требуется повторный CI |
 | Предыдущая опубликованная серия | `3a28be9`; [CI](https://github.com/cramen/LSwitch/actions/runs/38639631742) | Исторический результат на 255 тестах |
 | Сборка Chrome/звука/settlement | `make build`, `make test`: 322 теста, 0 ошибок, 0 пропусков; 02:39:26 | `.build/acceptance-chrome-transport-{build,tests,app}.log`; именно этот бинарник запущен для длительного наблюдения |
 | Дренирование очереди и готовый снимок | `make build`, `make test`: 329 тестов, 0 ошибок, 0 пропусков; 10:25 | `.build/acceptance-drain-{build,tests}.log`; на тот момент не заменяла работающий `.app` и не получила его длительную приёмку |

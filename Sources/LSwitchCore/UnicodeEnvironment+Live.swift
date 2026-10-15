@@ -88,7 +88,7 @@ private final class UnicodeLiveContext {
         return isCurrent() ? context : .unknown
     }
 
-    func rawSnapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
+    func rawSnapshot(canReadText: UnicodeEnvironment.TextReadPermission) -> UnicodeTextSnapshot? {
         #if DEBUG
         return UnicodePerformance.measure(.snapshot) { readSnapshot(canReadText: canReadText) }
         #else
@@ -96,7 +96,7 @@ private final class UnicodeLiveContext {
         #endif
     }
 
-    private func readSnapshot(canReadText: UnicodeEnvironment.Context.TextReadPermission) -> UnicodeTextSnapshot? {
+    private func readSnapshot(canReadText: UnicodeEnvironment.TextReadPermission) -> UnicodeTextSnapshot? {
         let role = Self.attribute(kAXRoleAttribute, in: target.element) as? String
         let nearest = Self.elementAttribute("AXEditableAncestor", in: target.element)
         let highest = Self.elementAttribute("AXHighestEditableAncestor", in: target.element)
@@ -122,7 +122,7 @@ private final class UnicodeLiveContext {
     }
 
     private func readSnapshot(
-        role: String?, editableRoot: Bool, canReadText: UnicodeEnvironment.Context.TextReadPermission
+        role: String?, editableRoot: Bool, canReadText: UnicodeEnvironment.TextReadPermission
     ) -> UnicodeTextSnapshot? {
         let access = SystemAXTextAccess()
         guard canReadText(), let text = access.text(in: target.element),
