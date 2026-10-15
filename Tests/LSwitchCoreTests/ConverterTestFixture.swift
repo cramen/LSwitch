@@ -24,6 +24,7 @@ final class ConverterFixture {
 
     let axEngine = StubEngine()
     let clipboardEngine = StubEngine()
+    let unicodeEngine = StubEngine()
     let undoStore = UndoStore()
     let rules: AppRules
     var layout: Layout? = .english
@@ -42,6 +43,7 @@ final class ConverterFixture {
     var safe = true
     var contextValid = true
     var clipboardPreferred = false
+    var unicodePreferred = false
 
     init() {
         let name = "lswitch.tests.\(UUID().uuidString)"
@@ -66,6 +68,10 @@ final class ConverterFixture {
         prefersClipboard: { [weak self] _ in self?.clipboardPreferred == true },
         makeAXEngine: { [axEngine] in axEngine },
         makeClipboardEngine: { [clipboardEngine] in clipboardEngine },
+        makeUnicodeEngine: { [weak self] _ in
+            guard let self, self.unicodePreferred else { return nil }
+            return self.unicodeEngine
+        },
         captureContext: { [weak self] in
             guard let self, self.safe else { return nil }
             return { [weak self] in self?.contextValid == true }

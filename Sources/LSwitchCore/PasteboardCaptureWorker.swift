@@ -31,11 +31,20 @@ final class PasteboardCaptureWorker {
     typealias Started = @MainActor @Sendable () -> Void
     typealias Start = (String, @escaping Started, @escaping Completion) -> (() -> Void)
 
-    static let shared = PasteboardCaptureWorker(start: { name, started, completion in
+    typealias Launch = (URL, String, @escaping Started, @escaping Completion) -> (() -> Void)
+
+    static let shared = configured(capability: ClipboardCaptureSupport.capability) { url, name, started, completion in
         let process = PasteboardCaptureProcess()
-        process.start(named: name, started: started, completion: completion)
+        process.start(named: name, executable: url, started: started, completion: completion)
         return { process.cancel() }
-    })
+    }
+
+    static func configured(capability: ClipboardHelperCapability, launch: @escaping Launch) -> PasteboardCaptureWorker {
+        PasteboardCaptureWorker(isAvailable: { capability.executableURL != nil }, start: { name, started, completion in
+            guard let executable = capability.executableURL else { completion(nil); return {} }
+            return launch(executable, name, started, completion)
+        })
+    }
 
     @MainActor
     private final class Pending {
@@ -45,15 +54,18 @@ final class PasteboardCaptureWorker {
     }
 
     private let start: Start
+    private let isAvailable: () -> Bool
     private let timeout: TimeInterval
     private var pending: Pending?
 
-    init(timeout: TimeInterval = 0.1, start: @escaping Start) {
+    init(timeout: TimeInterval = 0.1, isAvailable: @escaping () -> Bool = { true }, start: @escaping Start) {
         self.timeout = timeout
+        self.isAvailable = isAvailable
         self.start = start
     }
 
     func capture(named name: String, diagnostics: ConversionDiagnostics? = nil) async -> PasteboardCaptureResult {
+        guard isAvailable() else { return .unavailable }
         guard pending == nil else { return .busy }
         guard !Task.isCancelled else { return .cancelled }
         let operation = Pending()

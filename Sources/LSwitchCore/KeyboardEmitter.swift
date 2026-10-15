@@ -111,13 +111,16 @@ enum KeyboardEmitter {
         _ command: ClipboardCommand,
         targetPID: pid_t,
         isValid: () -> Bool,
-        didPost: () -> Void = {}
+        didPost: () -> Void = {},
+        afterBatch: (() -> Bool)? = nil
     ) -> Bool {
         guard command != .copy, command != .paste, targetPID > 0, isValid(),
               let events = events(for: command) else { return false }
         for event in events { post(event, targetPID: targetPID) }
         didPost()
-        return isValid()
+        // Некоторые операции меняют проверяемый диапазон уже до возврата post.
+        // Старые клиенты по умолчанию сохраняют прежнюю проверку после пакета.
+        return afterBatch?() ?? isValid()
     }
 
     private static func post(_ event: CGEvent, targetPID: pid_t) {

@@ -129,6 +129,10 @@ final class ClipboardTransaction {
             }
             return await finish(await performVerified(plan))
         }
+        if configuration.allowsSnapshotPath, usesKeyboardSelection {
+            reject(.keyboardUndoUnavailable)
+            return .blocked
+        }
         // Автоматика не создаёт выделение, пока нет проверяемого исходного текста.
         // Явная ручная команда и точный undo сохраняют clipboard fallback.
         guard request.useSelection || request.replacement != nil else {

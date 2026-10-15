@@ -4,7 +4,9 @@ extension ClipboardTransaction {
     var usesKeyboardSelection: Bool { context?.selectionMethod == .keyboard }
 
     func prepareKeyboardSelection(_ plan: AXReplacementPlan) -> Bool {
-        guard usesKeyboardSelection, !plan.wasSelection else { return true }
+        guard usesKeyboardSelection else { return true }
+        guard KeyboardSelectionPlan.inverse(of: plan) != nil else { return reject(.keyboardUndoUnavailable) }
+        guard !plan.wasSelection else { return true }
         guard plan.selection.location == plan.text.utf16.count else {
             return reject(.keyboardSelectionRequiresDocumentEnd)
         }

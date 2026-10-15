@@ -15,10 +15,11 @@ public final class ConversionDiagnostics {
         case selectionKeyboardRequested, selectionApplied, selectionSettled, pasteRequested
         case textConfirmed, layoutDecision, layoutObserved, layoutConfirmed
         case keyboardCommandStarted, keyboardCommandDown, keyboardKeyDown, keyboardCommandReturned
+        case unicodeDownRequested
         case rejected, finished
     }
 
-    public enum Mechanism: String, Sendable { case none, accessibility, clipboard }
+    public enum Mechanism: String, Sendable { case none, accessibility, clipboard, unicode }
 
     public enum Rejection: String, Sendable {
         case busy, rules, unsupportedLayout, requestInvalid, contextUnavailable, contextChanged
@@ -26,11 +27,13 @@ public final class ConversionDiagnostics {
         case secureInput, protectedField, holdUnavailable, holdExpired, cancelled
         case clipboardContextUnavailable, snapshotUnavailable, expectedSpanMismatch, engineUnavailable
         case unexpectedSelection, caretBeforeExpectedSpan
-        case keyboardSelectionUnavailable, keyboardSelectionRequiresDocumentEnd
+        case keyboardSelectionUnavailable, keyboardSelectionRequiresDocumentEnd, keyboardUndoUnavailable
         case clipboardChanged, clipboardNotRestorable, clipboardWriteFailed, selectionFailed
         case clipboardCaptureTimedOut, clipboardCaptureBusy, clipboardCaptureUnavailable
         case textChanged, selectionChanged, textNotConfirmed, layoutNotConfirmed, documentChanged
         case sourceCode, sourceContextUnknown, sourceDocumentChanged, sourceSnapshotUnverified
+        case unicodeSnapshotUnverified, unicodeInputSourceUnsupported
+        case unicodePayloadUnsupported, unicodePreparationFailed
     }
 
     public enum Completion: String, Sendable {

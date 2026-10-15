@@ -149,13 +149,13 @@ final class ClipboardNativeSelectionTests: XCTestCase {
     }
 
     func testExistingUserSelectionIsNeverExpandedOrRecreated() async {
-        let editor = nativeEditor("prefix ghbdtn suffix")
+        let editor = nativeEditor("prefix ghbdtn")
         editor.selection = 7..<13
         let result = await editor.converter().perform(ConversionRequest(sourceLayout: .english))
         XCTAssertEqual(result, .success(.init(original: "ghbdtn", converted: "привет")))
         XCTAssertEqual(editor.commands, [.paste])
         XCTAssertTrue(editor.rangeWrites.isEmpty)
-        XCTAssertEqual(editor.text, "prefix привет suffix")
+        XCTAssertEqual(editor.text, "prefix привет")
     }
 
     func testForeignClipboardAfterSelectionIsPreservedAndNeverPasted() async {

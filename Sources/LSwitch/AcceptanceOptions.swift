@@ -4,7 +4,7 @@ import LSwitchCore
 /// Изолированные варианты диагностической сборки. Остальные приложения используют штатный профиль.
 @MainActor
 enum AcceptanceOptions {
-    private enum Engine: String { case accessibility = "ax", clipboard, keyboard }
+    private enum Engine: String { case accessibility = "ax", clipboard, keyboard, unicode }
 
     private static var selectedEngine: Engine? {
         #if DEBUG
@@ -19,7 +19,7 @@ enum AcceptanceOptions {
 
     static func prefersClipboard(defaultValue: Bool) -> Bool {
         switch selectedEngine {
-        case .accessibility: return false
+        case .accessibility, .unicode: return false
         case .clipboard, .keyboard: return true
         case nil: return defaultValue
         }
@@ -35,6 +35,15 @@ enum AcceptanceOptions {
         }
         #endif
         return ClipboardConversionEngine()
+    }
+
+    static func makeUnicodeEngine(bundleID: String) -> (any ConversionEngine)? {
+        #if DEBUG
+        guard selectedEngine == .unicode, argument("--test-app-bundle=") == bundleID else { return nil }
+        return UnicodeTextConverter()
+        #else
+        return nil
+        #endif
     }
 
     private static func argument(_ prefix: String) -> String? {

@@ -7,7 +7,7 @@ final class PasteboardCaptureProcessTests: XCTestCase {
     func testEOFDoesNotCompleteUntilOfficialTerminationCallback() async throws {
         let fixture = try helperFixture(afterWrite: "exec 1>&-\nsleep 0.04\nexit 0")
         defer { try? FileManager.default.removeItem(at: fixture.deletingLastPathComponent()) }
-        let worker = captureWorker(executable: fixture)
+        let worker = captureWorker(fixture: fixture)
         let started = ContinuousClock.now
         let result = await worker.capture(named: "private-fixture")
         XCTAssertEqual(result, expected)
@@ -18,7 +18,7 @@ final class PasteboardCaptureProcessTests: XCTestCase {
     func testTerminationBeforePipeEOFStillWaitsForCompleteReply() async throws {
         let fixture = try helperFixture(beforeWrite: "(sleep 0.04) &", afterWrite: "exit 0")
         defer { try? FileManager.default.removeItem(at: fixture.deletingLastPathComponent()) }
-        let worker = captureWorker(executable: fixture)
+        let worker = captureWorker(fixture: fixture)
         let started = ContinuousClock.now
         let result = await worker.capture(named: "private-fixture")
         XCTAssertEqual(result, expected)
@@ -29,7 +29,7 @@ final class PasteboardCaptureProcessTests: XCTestCase {
     func testNonzeroExitRejectsOtherwiseValidReply() async throws {
         let fixture = try helperFixture(afterWrite: "exit 7")
         defer { try? FileManager.default.removeItem(at: fixture.deletingLastPathComponent()) }
-        let worker = captureWorker(executable: fixture)
+        let worker = captureWorker(fixture: fixture)
         let result = await worker.capture(named: "private-fixture")
         XCTAssertEqual(result, .unavailable)
         let next = await worker.capture(named: "private-fixture")
@@ -37,10 +37,17 @@ final class PasteboardCaptureProcessTests: XCTestCase {
     }
 
     @MainActor
-    private func captureWorker(executable: URL) -> PasteboardCaptureWorker {
+    private func captureWorker(fixture: URL) -> PasteboardCaptureWorker {
         PasteboardCaptureWorker(timeout: 2, start: { name, started, completion in
             let process = PasteboardCaptureProcess()
-            process.start(named: name, executable: executable, started: started, completion: completion)
+            // Проверяем lifecycle child отдельно от первого запуска нового executable-файла.
+            process.start(
+                named: name,
+                executable: URL(fileURLWithPath: "/bin/sh"),
+                arguments: [fixture.path],
+                started: started,
+                completion: completion
+            )
             return { process.cancel() }
         })
     }
@@ -52,7 +59,7 @@ final class PasteboardCaptureProcessTests: XCTestCase {
     private func helperFixture(beforeWrite: String = "", afterWrite: String) throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let executable = directory.appendingPathComponent("private-capture-fixture.sh")
+        let fixture = directory.appendingPathComponent("private-capture-fixture.sh")
         let reply = PasteboardCaptureReply(
             snapshot: PasteboardSnapshot(items: [.init(dataByType: ["text": Data("fixture".utf8)])]),
             changeCountBefore: 1, changeCountAfter: 1
@@ -61,8 +68,7 @@ final class PasteboardCaptureProcessTests: XCTestCase {
         let encoded = try XCTUnwrap(String(bytes: data, encoding: .utf8))
         let payload = encoded.replacingOccurrences(of: "'", with: "'\\''")
         let script = "#!/bin/sh\n\(beforeWrite)\nprintf '%s' '\(payload)'\n\(afterWrite)\n"
-        try Data(script.utf8).write(to: executable)
-        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: executable.path)
-        return executable
+        try Data(script.utf8).write(to: fixture)
+        return fixture
     }
 }

@@ -11,14 +11,16 @@ CGEvent-драйвером только в отдельных тестовых �
 
 | Набор | Подтверждение | Граница доказательства |
 | --- | --- | --- |
-| Последний опубликованный код | `main`, коммит `3a28be9`; [CI](https://github.com/cramen/LSwitch/actions/runs/38639631742) | Предыдущая серия на 255 тестах; не CI новых изменений |
+| Последний опубликованный проверенный код | `main`, коммит `2ca1f03`; [CI](https://github.com/cramen/LSwitch/actions/runs/38725549370) | Build, 417 тестов без ошибок, SwiftLint strict: 0 нарушений в 118 файлах; не проверка последующих рабочих изменений Unicode/helper capability |
+| Предыдущая опубликованная серия | `3a28be9`; [CI](https://github.com/cramen/LSwitch/actions/runs/38639631742) | Исторический результат на 255 тестах |
 | Сборка Chrome/звука/settlement | `make build`, `make test`: 322 теста, 0 ошибок, 0 пропусков; 02:39:26 | `.build/acceptance-chrome-transport-{build,tests,app}.log`; именно этот бинарник запущен для длительного наблюдения |
 | Дренирование очереди и готовый снимок | `make build`, `make test`: 329 тестов, 0 ошибок, 0 пропусков; 10:25 | `.build/acceptance-drain-{build,tests}.log`; на тот момент не заменяла работающий `.app` и не получила его длительную приёмку |
 | Защита кодового контекста | `make build`, `make test`: 357 тестов, 0 ошибок, 0 пропусков | `.build/acceptance-code-context-fixed-{build,tests}.log`; промежуточный прогон до уточнений lexer, sound и capture |
 | Кодовый контекст, capture helper и слышимый звук | `make build`, `make test`, `make app`: 371 тест, 0 ошибок, 0 пропусков; 11:01:26 | `.build/acceptance-capture-sound-fixed-{build,tests,app}.log`; отдельный живой PID 17034 |
 | Точность undo и диагностика команд | `make build`, `make test`, `make app`: 379 тестов, 0 ошибок, 0 пропусков; 11:16:25 | `.build/acceptance-undo-command-{build,tests,app}.log`; отдельный живой PID 19765 |
 | Завершение helper и строковый кандидат | `make build`, `make test`, `make app`: 393 теста, 0 ошибок, 0 пропусков; 11:50:40 | `.build/acceptance-process-quotes-{build,tests,app}.log`; строковый сценарий TextEdit повторён живьём |
-| Нативное выделение, EOF и TIS | `make build`, `make test`, `make app`: 417 тестов, 0 ошибок, 0 пропусков; 12:44:36 | `.build/acceptance-native-eof-tis-{build,tests,app}.log`; локальная сборка, нового CI ещё нет |
+| Нативное выделение, EOF и TIS | `make build`, `make test`, `make app`: 417 тестов, 0 ошибок, 0 пропусков; 12:44:36 | `.build/acceptance-native-eof-tis-{build,tests,app}.log`; живая сборка PID 28729, последующий style checkpoint имеет собственный CI |
+| Unicode и границы обратной операции | `make build`, `make test`, `make app`: 489 тестов, 0 ошибок, 0 пропусков; 15:12:05 | `.build/unicode-boundaries-{build,tests,app}.log`; локальный checkpoint, последнего CI на 417 это не заменяет |
 
 Защита кодового контекста входит в новые локальные прогоны; её полная живая матрица
 ещё не принята. Новые изменения должны пройти собственный общий прогон и CI;
@@ -42,6 +44,10 @@ CGEvent-драйвером только в отдельных тестовых �
 | 379 | 19765 / `2026-10-15T08:26:04Z` | `775b77f074eb7f15b41125979eebb9846736673956256754f9b7389fe021c163` | `.build/acceptance-379-live.jsonl` |
 | 393 | 23208 / `2026-10-15T08:52:15Z` | `ee2b899349018d8c8ff2a0c6672e8f568db7fc77322b30c8406eccf43b4ead3b` | `.build/acceptance-393-live.jsonl` |
 | 417 | 28729 / `2026-10-15T09:46:05Z` | `6a74a46b5c3e2ead54bfd5d96b808dfee988d24a18e1ec1da19afd81e4664a1b` | `.build/acceptance-417-live.jsonl` |
+| 467 / DEBUG Unicode | 42191 / `2026-10-15T11:43:17Z` | `968934f492ee417edb2cb91b9f027c7c0410ee5edee1608b6856cf8781bdd0e5` | `.build/acceptance-467-unicode-chrome.jsonl` |
+| 470 / DEBUG Unicode | 44075 / `2026-10-15T11:59:15Z` | `2c67f180cef07f923a624d0f2398b087d7243ad3aba29a961b00bc4abee6e675` | `.build/acceptance-470-unicode-chrome.jsonl` |
+| 489 / DEBUG Unicode | 45544 / `2026-10-15T12:13:06Z` | `21a1a5a2777d8260de8ab6b99fbc55911d2151f21591c698e493d1e3a6c1a890` | `.build/acceptance-489-unicode-chrome.jsonl` |
+| 489 / обычный режим | 46088 / `2026-10-15T12:19:51Z` | `21a1a5a2777d8260de8ab6b99fbc55911d2151f21591c698e493d1e3a6c1a890` | `.build/acceptance-489-normal.jsonl` |
 
 Восьмичасовое наблюдение набора 322 не переносится на последующие сборки или текущие исходники.
 
@@ -352,9 +358,9 @@ SHA-256 снимка items/types/Data; содержимое пользовате
 
 | Исходный provider | Конвертация | Сохранность clipboard | Реальный receiver |
 | --- | --- | --- | --- |
-| TextEdit, styled RTF с жирным `LSwitch`, 3 типа | Ручная Chrome393 | SHA-256 до/после совпал: `11b13ff7fd94b4ff9587e7034882e43c58200911f7ffbbe75668963f5ec81215` | TextEdit `rtf-receiver-20261015.rtf`: текст принят, Bold=1 подтверждён через UI |
-| Preview, `pixels.png`, 2 типа | Ручная Chrome417 на диагностической странице | SHA-256 совпал: `fa2030316d8ece7f890e222b7347fee512eab32d8b9054c1f54e395351970146` | Preview New From Clipboard принял PNG 2×2 |
-| Finder, два собственных файла, 2 items с 3/1 типами | Safari417, `ghbdtn` → `привет` | SHA-256 совпал: `54eaff52b882f7db8d2c79ee2693515a742826adf14d0161285f57c40b342359` | Finder скопировал оба файла в собственный receiver-каталог; bytesEqual=true для каждого |
+| TextEdit, styled RTF с жирным `LSwitch`, 3 типа | Ручная Chrome 393 | SHA-256 до/после совпал: `11b13ff7fd94b4ff9587e7034882e43c58200911f7ffbbe75668963f5ec81215` | TextEdit `rtf-receiver-20261015.rtf`: текст принят, Bold=1 подтверждён через UI |
+| Preview, `pixels.png`, 2 типа | Ручная Chrome 417 на диагностической странице | SHA-256 совпал: `fa2030316d8ece7f890e222b7347fee512eab32d8b9054c1f54e395351970146` | Preview New From Clipboard принял PNG 2×2 |
+| Finder, два собственных файла, 2 items с 3/1 типами | Safari 417, `ghbdtn` → `привет` | SHA-256 совпал: `54eaff52b882f7db8d2c79ee2693515a742826adf14d0161285f57c40b342359` | Finder скопировал оба файла в собственный receiver-каталог; bytesEqual=true для каждого |
 
 Логи: `.build/matrix-393-rtf-chrome-{manual,diagnostics}.log`,
 `.build/clipboard-styled-rtf-receiver.log`, `.build/matrix-417-image-chrome-{before,after}.log`,
@@ -365,11 +371,11 @@ SHA-256 снимка items/types/Data; содержимое пользовате
 `file-two.txt` — `563dd7fd57ef8319fc46ed198a3166710de3a95b71373b82ae6e600a0b93fe49`
 у source и receiver. Это обычные файловые representations, не file promises.
 
-Эти три конкретные пары provider/receiver приняты в указанном объёме. Полная 4.3
-остаётся открытой: production-гонка более нового копирования и настоящий исходный
-promise в general clipboard с приёмом после отказа ещё не запускались; соответствующие
-драйверы подготовлены, но это не выполненные проверки. Материализуемые ленивые
-providers и полная прикладная матрица также требуют отдельного подтверждения.
+Эти три конкретные пары provider/receiver приняты в указанном объёме. Позднее
+выполнены production-гонка внешней записи и genuine legacy promise в general clipboard
+с приёмом после отказа — см. отдельные протоколы ниже. Modern general baseline остался
+`setup-unconfirmed`. Полная 4.3 открыта: материализуемые ленивые providers и полная
+прикладная матрица требуют отдельного подтверждения; отдельные PASS не закрывают её.
 
 ## Сравнение отдельных probe-бандлов
 
@@ -443,7 +449,33 @@ count 3214, fingerprint `338a3d986bbcbc43f2a3206a429aaa307429eeded38ff142415fe95
 очищен явной кнопкой после проверки владения; исходный пустой clipboard возвращён.
 Логи: `.build/promise-general-417-safari-{driver,diagnostics}.log` и events.jsonl
 указанной лаборатории. Граница modern drag/drop не объявляется универсальной
-невозможностью clipboard promises; отдельный legacy-контроль ещё требуется.
+невозможностью clipboard promises; отдельный legacy-контроль выполнен ниже.
+
+## Genuine legacy promise в General после отказа, 14:11–14:14 МСК
+
+В этом отдельном опыте использован настоящий Carbon `PasteboardSetPromiseKeeper`
+с сохранённым владельцем, без raw replay или подмены promise обычным fileURL.
+Сессия `/private/tmp/LSwitchPromiseLab-4CBC7027-0FF5-478D-9AFD-5B69F7A5686A`,
+первичный журнал `events.jsonl`. Исходный аудитор завершён после подтверждения
+пустого original при count 3216; лаборатория затем трогала только собственные публикации.
+
+| Шаг | Время МСК | Результат |
+| --- | --- | --- |
+| Baseline A, count 3217 | 14:11:52 | Настоящий receiver вызвал новую запись provider, принял точные bytes в новый destination |
+| Свежая публикация B, count 3218 | 14:12:43 | Новый provider, writesAtPublication=0, owner подтверждён |
+| LSwitch417 / PID 28729 | 14:12:56.957 | `clipboardNotRestorable` / `blockedBySafety` до мутации, текст/выделение/clipboard не изменены |
+| Приём B после отказа | 14:13:18 | Новый provider write, exact bytes и новый destination подтверждены; owner/count 3218 сохранены |
+| Явная очистка своей публикации | 14:13:48 | Count3219, возвращён исходный пустой clipboard |
+
+Payload SHA-256:
+`a7894dfc098c0ff145636c4bc122ac97352e236756484cbcbbebe51111cbca7a`.
+Логи LSwitch/драйвера: `.build/legacy-promise-417-safari-{driver,diagnostics}.log`.
+Независимая проверка файлов подтвердила два разных destination, по 89 bytes,
+оба с указанным SHA-256: `.build/legacy-promise-417-receipts.json`.
+Это PASS сохранения исходного legacy provider при production-отказе и его реального
+приёма после отказа. Он не превращает modern General `setup-unconfirmed` в PASS
+и не объявляет поддержанными все promise-протоколы. Общая задача 4.3 остаётся
+открытой для оставшейся форматной/прикладной матрицы и материализуемых ленивых providers.
 
 ## Исследовательский Unicode-пакет — ещё не продуктовый механизм
 
@@ -466,7 +498,88 @@ Unicode-ввод `hello`, давший `приветhello`; логи
 (417 тестов, 0 ошибок/пропусков, 13:53:20 MSK) и `make app`.
 Новый собранный SHA-256: `f594858c8762dd29243bb0593426a28291f98c44080937a0d65b1be4781e5143`.
 Он ещё не запускался: приведённая выше живая проверка относится к PID 28729.
-Логи: `.build/checkpoint-417-{build,tests,app}.log`; строгий CI ещё ожидается.
+Логи: `.build/checkpoint-417-{build,tests,app}.log`.
+
+## Опубликованный checkpoint и CI
+
+Checkpoint `66f3cdc` отправлен в main: [CI](https://github.com/cramen/LSwitch/actions/runs/38724175611)
+прошёл build/test, но остановился на 12 замечаниях SwiftLint. Отдельный style fix
+`85c0b07` также прошёл build и 417 тестов, однако [CI](https://github.com/cramen/LSwitch/actions/runs/38724700041)
+сохранил одно нарушение: тело AppDelegate 305 строк при лимите 300.
+
+После выделения окна настроек коммит `2ca1f03`
+[прошёл CI](https://github.com/cramen/LSwitch/actions/runs/38725549370) 15 октября
+в 14:12:24 МСК: build, **417 тестов, 0 ошибок**, SwiftLint strict **0 нарушений
+в 118 файлах**. Исторические неуспешные CI не переписаны в PASS.
+Эта проверка привязана к `2ca1f034798cffbb99eaec9f36c7827794f24b34` и не покрывает
+последующие незакоммиченные Unicode engine и helper capability. Их реализация
+впоследствии прошла локальный набор 489 и ограниченные живые сценарии ниже,
+но собственного CI и полной продуктовой приёмки ещё нет. Составные задачи не закрывались.
+
+## DEBUG Unicode: живые результаты 467–489
+
+Unicode engine реализован и включался явно только для диагностики. По умолчанию
+он **не включён**; после проверки запущен PID 46088 сборки 489 в обычном режиме.
+Положительные результаты ниже относятся к DEBUG-профилю и конкретным тестовым
+полям Chrome; они не принимают весь профиль Chrome/VS Code или основную матрицу.
+Аудитор 87281 подтвердил сохранение исходного пустого clipboard, count 3222.
+
+| Набор / сценарий | Подтверждённый результат | От исходного события | Цель auto ≤200 мс |
+| --- | --- | ---: | --- |
+| 467, первый EN→RU auto | `converted`, TIS=RU | 337,490 мс | **FAIL** |
+| 467, RU→EN auto и точный undo | После undo исходное `цщкдв` | 293,483 / 351,489 мс | **FAIL** для auto |
+| 467, auto с продолжением | `world hello` | 319,789 мс | **FAIL** |
+| 467, rich auto и receipt undo | После undo `ghbdtn` + исходный U+00A0 | 289,447 / 359,852 мс | **FAIL** для auto |
+| 470, первый RU→EN auto | `converted`, TIS=EN | 300,724 мс | **FAIL** |
+| 470, EN→RU с продолжением | `привет мир` | 323,806 мс | **FAIL** |
+| 489, первый RU→EN auto после узкого refactor guards | `converted`, TIS=EN | 291,461 мс | **FAIL** |
+
+Rich undo отдельно проверен по UTF-16 `[103,104,98,100,116,110,160]`:
+неразрывный пробел не заменён обычным. Это точный receipt undo LSwitch;
+результаты старого эксперимента системного Cmd+Z не переименованы в такой undo.
+Логи `.build/matrix-467-chrome-{auto-first-en,auto-ru-undo,continuation-rich}-diagnostics.log`,
+`.build/matrix-470-chrome-{auto-first-ru,auto-en-continuation}-diagnostics.log`,
+`.build/matrix-489-chrome-auto-first-ru-diagnostics.log`.
+
+Счётчики производительности локализуют работу guards: первый 470 — engine 274,679 мс,
+215 проверок isCurrent, 59 documentIdentity, 11 snapshot; первый 489 — engine 253,895 мс,
+149/42/10 соответственно. Времена вложенные (`inclusive_overlapping=true`) и
+**не суммируются** как независимые этапы. Уменьшение числа вызовов и времени в одном
+сценарии не означает выполнения порога 200 мс. Следующий performance-шаг ещё обсуждается.
+
+### Отказ до замены при неподдержанном обратном выделении
+
+На 467 воспроизведён дефект: выбранный в середине текста `ghbdtn` в
+`prefix ghbdtn suffix` заменился на `привет`, но receipt undo отказал с
+`keyboardSelectionRequiresDocumentEnd`. Это не поддержанная конвертация с точным undo.
+На 489 предварительно проверяется возможность обратного выделения. Тот же сценарий
+отказал **до** мутации с `keyboardUndoUnavailable`: DEBUG Unicode за 22,204 мс,
+обычный clipboard за 47,499 мс. UI подтвердил исходный текст и неизменное выделение;
+capture/write отсутствуют, clipboard count 3222 сохранён.
+Логи `.build/matrix-467-chrome-middle-undo-diagnostics.log` и
+`.build/matrix-489{,-normal}-chrome-middle-refusal{,-diagnostics}.log`.
+Это PASS безопасного отказа, **не поддержка выделения в середине документа**.
+
+### История локальных прогонов
+
+Первый набор 463 имел одну ошибку ожидания ACK в тестовой модели; она исправлена
+в модели, результат первого прогона остаётся FAIL. Набор 464 получил процессный
+timeout 2 с до первого байта payload; конкретная системная причина не доказана.
+Fixture запускает `/bin/sh` со script-аргументом, deadline 2 с не увеличен.
+Следующие общие наборы 465/467/470/489 прошли без ошибок; итоговый 489 — без пропусков.
+Логи `.build/unicode-integration{,-2,-3,-4}-tests.log`,
+`.build/unicode-performance-tests.log`, `.build/unicode-boundaries-tests.log`.
+Build/app489 также прошли; новый CI ещё требуется. Исторические failures сохранены,
+а изменения не получают восьмичасовую приёмку от предыдущих бинарников.
+
+### Короткий контроль обычного режима 489
+
+После возврата к обычному режиму PID 46088 ручная команда в собственном поле Safari
+дала `ghbdtn` → `привет`, TIS EN→RU, `converted` за 196,593 мс. Это **ручная** команда,
+не PASS автоматической цели 200 мс. Зарегистрированный helper выполнил захват,
+восстановление clipboard подтверждено; исходный пустой fingerprint сохранён,
+changeCount после операции 3224. Логи
+`.build/matrix-489-normal-safari-helper{,-diagnostics}.log`.
 
 ## Остаток по приоритетам
 
@@ -480,7 +593,7 @@ Unicode-ввод `hello`, давший `приветhello`; логи
    пользователь подтвердил после исправления собственного SystemSoundID.
    Прежнее отклонение доступа к iTerm не обходится другим инструментом.
 3. **Stage2:** завершить кодовую матрицу; защита идентификатора, комментарий и ручной
-   обход в TextEdit379 подтверждены, строковая регрессия исправлена и принята на393.
+   обход в TextEdit 379 подтверждены, строковая регрессия исправлена и принята на 393.
    Проверить оба направления, точный undo,
    пароль и холодную/прогретую задержку по каждому механизму. Исходный корпус
    с FP в коде не переписывается под новый runtime guard.

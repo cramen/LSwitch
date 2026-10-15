@@ -43,6 +43,7 @@ public final class Converter {
     private let prefersClipboard: (String) -> Bool
     private let makeAXEngine: () -> any ConversionEngine
     private let makeClipboardEngine: () -> any ConversionEngine
+    private let makeUnicodeEngine: ((String) -> (any ConversionEngine)?)?
     private let captureContext: ContextCapture?
     private let onConverted: () -> Void
     private let onLayoutSwitched: (Layout, Layout, UInt64) -> Void
@@ -103,6 +104,7 @@ public final class Converter {
         prefersClipboard: @escaping (String) -> Bool = { _ in false },
         makeAXEngine: @escaping () -> any ConversionEngine,
         makeClipboardEngine: @escaping () -> any ConversionEngine,
+        makeUnicodeEngine: ((String) -> (any ConversionEngine)?)? = nil,
         captureContext: ContextCapture? = nil,
         beginInputHold: @escaping () -> Bool = { true },
         endInputHold: @escaping () -> Void = {},
@@ -119,6 +121,7 @@ public final class Converter {
         self.prefersClipboard = prefersClipboard
         self.makeAXEngine = makeAXEngine
         self.makeClipboardEngine = makeClipboardEngine
+        self.makeUnicodeEngine = makeUnicodeEngine
         self.captureContext = captureContext
         self.onConverted = onConverted
         self.onLayoutSwitched = onLayoutSwitched
@@ -331,6 +334,10 @@ extension Converter {
 
     private func perform(_ request: ConversionRequest, bundleID: String) async -> ConversionResult {
         guard request.isValid() else { return .blocked }
+        if let engine = makeUnicodeEngine?(bundleID) {
+            request.diagnostics?.mark(.engineStarted, mechanism: .unicode)
+            return await engine.perform(request)
+        }
         if modeCache[bundleID] == .clipboard || prefersClipboard(bundleID) {
             request.diagnostics?.mark(.engineStarted, mechanism: .clipboard)
             return await makeClipboardEngine().perform(request)
@@ -376,20 +383,5 @@ extension Converter {
         if let captureContext { return captureContext() }
         guard let target = InputSafety.captureTarget(diagnostics: diagnostics) else { return nil }
         return { target.isCurrent(diagnostics: diagnostics) }
-    }
-
-    private func outcome(for result: ConversionResult, diagnostics: ConversionDiagnostics) -> Outcome {
-        switch result {
-        case .blocked:
-            diagnostics.reject(.requestInvalid)
-            return .blockedBySafety
-        case .unavailable:
-            diagnostics.reject(.engineUnavailable)
-        case .failed:
-            diagnostics.reject(.textNotConfirmed)
-        case .success:
-            break
-        }
-        return .failed
     }
 }

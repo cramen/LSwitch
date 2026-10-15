@@ -11,16 +11,17 @@ final class PasteboardCaptureProcess {
 
     func start(
         named name: String,
-        executable: URL? = Bundle.main.executableURL,
+        executable: URL,
+        arguments: [String]? = nil,
         started: @escaping PasteboardCaptureWorker.Started,
         completion: @escaping PasteboardCaptureWorker.Completion
     ) {
-        guard let executable else { completion(nil); return }
         let trace = PasteboardCaptureTrace()
+        let childArguments = arguments ?? [PasteboardCaptureHelper.argument, name]
         trace.mark("scheduled")
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let output = Pipe()
-            let child = Self.makeChild(named: name, executable: executable, output: output)
+            let child = Self.makeChild(executable: executable, arguments: childArguments, output: output)
             let terminated = DispatchSemaphore(value: 0)
             var launched = false
             child.terminationHandler = { _ in
@@ -86,10 +87,10 @@ final class PasteboardCaptureProcess {
         completion(cancelled ? nil : reply)
     }
 
-    nonisolated private static func makeChild(named name: String, executable: URL, output: Pipe) -> Process {
+    nonisolated private static func makeChild(executable: URL, arguments: [String], output: Pipe) -> Process {
         let child = Process()
         child.executableURL = executable
-        child.arguments = [PasteboardCaptureHelper.argument, name]
+        child.arguments = arguments
         child.standardInput = FileHandle.nullDevice
         child.standardOutput = output
         child.standardError = FileHandle.nullDevice

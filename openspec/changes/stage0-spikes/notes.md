@@ -169,7 +169,7 @@ pasteboard подтверждает восстановление смешанн�
 событий перед началом преобразования и готовый AX-снимок. Работающий длительно
 `.app`, PID 81843, на момент того наблюдения был сборкой на 322 тестах; SHA-256 и локальные
 логи зафиксированы в [общем протоколе](../../../docs/acceptance-2026-10-15.md).
-Последний опубликованный CI `3a28be9` относится к прежней серии на 255 тестах;
+На том шаге последний опубликованный CI `3a28be9` относился к серии на 255 тестах;
 новый рабочий код пока не имеет собственного CI.
 
 Настоящее отключение tap через `CGEvent.tapEnable(false)` и последующая внешняя
@@ -201,7 +201,7 @@ CPU/RSS измерены только в последнем получасе, н
 receivers. `setup-unconfirmed` modern baseline не является доказательством
 невозможности восстановления. Подробные результаты и оставшиеся шаги — в общем протоколе.
 
-Отдельные подписанные sandbox/non-sandbox probe-бандлы из исходников набора329
+Отдельные подписанные sandbox/non-sandbox probe-бандлы из исходников набора 329
 прошли по три частных clipboard-сценария: смешанный snapshot с RTF/PNG/файлами,
 ленивый provider и отказ до clear при nil-данных. Оба LaunchServices-процесса
 сообщили AX/listen/post=false, новых TCC-разрешений не получали. Direct CLI
@@ -216,7 +216,7 @@ README/TZ обновлены честными текущими границам�
 ## Новые бинарники и modern promise, 2026-10-15
 
 Общие локальные build/test/app на 371 (11:01 МСК) и 379 тестах (11:16 МСК)
-прошли без ошибок и пропусков; собственного CI нового кода ещё нет. Сборки и SHA
+прошли без ошибок и пропусков; на этом шаге собственного CI нового кода ещё не было. Сборки и SHA
 разделены в [общем протоколе](../../../docs/acceptance-2026-10-15.md).
 Восьмичасовая сессия 322 не распространяется на них. Последняя точка сессии 371,
 11:25:53 МСК: 975 callback, максимум 4,749458 мс, два превышения 1 мс,
@@ -274,14 +274,14 @@ Proposal/spec/design/tasks и README/TZ приведены к этому явн�
 12:44:36 МСК. Логи `.build/acceptance-native-eof-tis-{build,tests,app}.log`.
 Запущен отдельный PID 28729 с SHA-256
 `6a74a46b5c3e2ead54bfd5d96b808dfee988d24a18e1ec1da19afd81e4664a1b`;
-нового опубликованного CI пока нет, `3a28be9` подтверждает только прежний код.
+на этом шаге нового опубликованного CI ещё не было, `3a28be9` подтверждал прежний код.
 Точка 13:35:05 МСК: 136 callback, max 0,523750 мс, 0 превышений 1 мс/recovery,
 uptime tap 2 939,899 с. Это короткая серия, а не перенос восьмичасового PASS322.
 
 Helper теперь использует официальный terminationHandler и EOF вместо polling
 `waitUntilExit`. Частный benchmark100 подтвердил уменьшение post-EOF ожидания
 до 0,054 мс. Live capture393: 43,629 мс до mainCompletion; live417 helper
-39,865/48,511 мс в двух сохранённых сценариях. Однако первый Paste Chrome417
+39,865/48,511 мс в двух сохранённых сценариях. Однако первый Paste Chrome 417
 не подтверждён, cleanup выполнен. На собственной диагностической странице
 и затем нейтральной странице с метаданными только в RAM конвертации прошли.
 Причина непостоянного результата ещё не установлена. Ручные 316,830 мс не
@@ -289,15 +289,78 @@ Helper теперь использует официальный terminationHandl
 
 Приняты конкретные реальные provider/receiver сценарии после конвертаций:
 
-- Styled RTF из TextEdit → Chrome393 → TextEdit: исходный fingerprint всех трёх
+- Styled RTF из TextEdit → Chrome 393 → TextEdit: исходный fingerprint всех трёх
   типов сохранён, текст и жирное оформление приняты в тестовом receiver-документе.
-- PNG из Preview → Chrome417 → Preview New From Clipboard: fingerprint двух
+- PNG из Preview → Chrome 417 → Preview New From Clipboard: fingerprint двух
   типов сохранён, receiver принял изображение 2×2.
-- Два файла из Finder → Safari417 → Finder: fingerprint двух items (3/1 типа)
+- Два файла из Finder → Safari 417 → Finder: fingerprint двух items (3/1 типа)
   сохранён, bytes обоих принятых файлов равны исходникам.
 
 Полные SHA и локаторы — в [общем протоколе](../../../docs/acceptance-2026-10-15.md),
 файловый контроль — `.build/clipboard-files-receiver-verification.json`.
-Это обычные файлы, не promises. Гонка нового копирования и genuine general promise
-с последующим receiver пока не запускались. Подготовленные драйверы не считаются
-принятыми сценариями; составная 4.3 остаётся открытой.
+Это обычные файлы, не promises. На этом шаге гонка нового копирования и genuine
+general promise с последующим receiver ещё не запускались; их позднейшие результаты
+зафиксированы ниже. Составная 4.3 остаётся открытой.
+
+## Внешняя запись, legacy promise и зелёный CI, 2026-10-15
+
+На том же LSwitch417 PID 28729 выполнена настоящая межпроцессная запись в general
+clipboard: после временного текста LSwitch сторонний тестовый процесс записал marker.
+Count3211→3212→3213; marker сохранён, приложение отказало с `clipboardChanged`
+до изменения выделения/Paste, слово Safari осталось исходным. Это PASS данного
+foreign-write сценария, не физический Cmd+C или доказательство атомарного CAS.
+Логи `.build/clipboard-race-417-safari-v2.jsonl` и
+`.build/clipboard-race-417-safari-v2-diagnostics.log`; условия — в общем протоколе.
+
+Modern NSFilePromiseProvider в General дал `SETUP UNCONFIRMED` и до, и после
+production-отказа: исходный receiver baseline отсутствует. Этот результат не PASS.
+Отдельный genuine Carbon legacy promise в General принят полностью:
+
+- A/count 3217: исходный receiver baseline PASS в 14:11:52 МСК.
+- Свежий B/count 3218 опубликован в 14:12:43, без предварительной материализации.
+- В 14:12:56.957 LSwitch отказал `clipboardNotRestorable` до мутации.
+- В 14:13:18 настоящий receiver вызвал новую запись provider в новый destination,
+  получил точные bytes; owner/count 3218 сохранены.
+- Собственная публикация очищена в 14:13:48, count 3219; исходный пустой clipboard возвращён.
+
+Payload SHA `a7894dfc098c0ff145636c4bc122ac97352e236756484cbcbbebe51111cbca7a`.
+Лаборатория `/private/tmp/LSwitchPromiseLab-4CBC7027-0FF5-478D-9AFD-5B69F7A5686A/events.jsonl`;
+`.build/legacy-promise-417-safari-{driver,diagnostics}.log`. Это PASS конкретного
+preservation/receiver контракта после отказа, не перенос на modern baseline.
+Полная 4.3 остаётся открытой для остальной прикладной/форматной матрицы и
+материализуемых ленивых providers.
+
+[CI `2ca1f03`](https://github.com/cramen/LSwitch/actions/runs/38725549370) завершён
+15 октября в 14:12:24 МСК: build, 417 тестов без ошибок, SwiftLint strict
+0 нарушений в 118 файлах. Предыдущие checkpoint `66f3cdc` и style fix `85c0b07`
+прошли build/test, но получили соответственно 12 и 1 замечание lint; история сохранена.
+Незакоммиченные Unicode engine/helper capability в разработке и не покрыты этим CI.
+Составные checkbox и архивирование не менялись.
+
+## Локальный checkpoint 489: Unicode и обратное выделение
+
+`make build`, `make test`, `make app` прошли 15 октября в 15:12 МСК:
+**489 тестов, 0 ошибок, 0 пропусков**. Логи `.build/unicode-boundaries-{build,tests,app}.log`.
+SHA `21a1a5a2777d8260de8ab6b99fbc55911d2151f21591c698e493d1e3a6c1a890`;
+после DEBUG-сценариев запущен обычный режим PID 46088,
+`.build/acceptance-489-normal.jsonl`. Unicode остаётся DEBUG-only, default выключен.
+Последний опубликованный green CI — `2ca1f03` с 417 тестами; 489 своего CI ещё не имеет.
+
+Chrome 467 подтвердил auto в обе стороны, продолжение `world hello` и receipt undo,
+включая исходный NBSP в rich. Auto467–489 занял 289–337 мс: цель ≤200 мс не пройдена.
+Первый 470:300,724 мс, engine 274,679 мс, isCurrent/documentIdentity/snapshot 215/59/11;
+первый 489:291,461 мс, engine 253,895 мс, вызовы 149/42/10. Вложенные длительности
+не суммируются. Никакой следующий performance-план этим не объявляется реализованным.
+
+На 467 выбранное слово в середине `prefix ghbdtn suffix` заменилось, но undo отказал
+`keyboardSelectionRequiresDocumentEnd`. Исправление 489 проверяет обратный диапазон
+до замены: Unicode22,204 мс и normal clipboard 47,499 мс отказали
+`keyboardUndoUnavailable` без capture/write, с исходными текстом/выделением/count 3222.
+Это PASS безопасного отказа, не поддержка middle selection.
+
+В обычном 489 ручной Safari `ghbdtn`→`привет` прошёл за 196,593 мс с TIS EN→RU,
+захватом через зарегистрированный helper и восстановлением пустого clipboard,
+итоговый count 3224. Manual196,593 мс не является autoPASS200 мс.
+Лог `.build/matrix-489-normal-safari-helper{,-diagnostics}.log`.
+Прочие сценарии/точные SHA и числа — в [общем протоколе](../../../docs/acceptance-2026-10-15.md).
+Составные задачи не закрывались; legacy promise/race PASS сохраняют свой отдельный объём.

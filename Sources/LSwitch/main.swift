@@ -261,6 +261,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             },
             makeAXEngine: { AXConversionEngine() },
             makeClipboardEngine: { AcceptanceOptions.makeClipboardEngine() },
+            makeUnicodeEngine: { AcceptanceOptions.makeUnicodeEngine(bundleID: $0) },
             beginInputHold: { [weak self] in
                 guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
                 self.inputHoldingTap = tap
@@ -364,6 +365,12 @@ extension AppDelegate {
 
 if MainActor.assumeIsolated({ PasteboardCaptureHelper.runIfRequested(arguments: CommandLine.arguments) }) {
     exit(0)
+}
+
+MainActor.assumeIsolated {
+    if let executable = Bundle.main.executableURL {
+        ClipboardCaptureSupport.registerHelper(executableURL: executable)
+    }
 }
 
 if CommandLine.arguments.contains("--verify-resources") {
