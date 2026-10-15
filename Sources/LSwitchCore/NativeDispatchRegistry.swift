@@ -30,11 +30,6 @@ struct NativeDispatchPairShape: Sendable {
 struct NativeDispatchReservation: Equatable, Sendable {
     let marker: Int64
     fileprivate let registryIdentity: UUID
-
-    fileprivate init(marker: Int64, registryIdentity: UUID) {
-        self.marker = marker
-        self.registryIdentity = registryIdentity
-    }
 }
 
 struct NativeDispatchPairReservation: Sendable {
