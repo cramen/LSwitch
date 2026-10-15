@@ -1118,3 +1118,31 @@ Timeout 120 секунд — граница диагностического pre
 Working runtime не создаёт ledger и не передаёт очередь в RAM coordinator; gate,
 handover, OFF/quit lifecycle и production P1 остаются открытыми. `fix-input-recovery`
 сохраняет **2/14** выполненных задач и не архивируется.
+
+## Зелёный CI компонентного checkpoint 688
+
+Коммит `06a95f77c3e9efcd232d0a96b45a9779b2d819ba` прошёл
+[CI](https://github.com/cramen/LSwitch/actions/runs/38800925003): build,
+688 тестов без failures и strict SwiftLint — 0 нарушений в 204 файлах.
+Полный лог: `.build/checkpoint-06a95f7-ci.log`. Предшествующий `3f1a307` прошёл
+build/test, но получил три lint-замечания; переименование mouse release и переход
+к isDisjoint устранили их без изменения поведения. Этот зелёный результат не
+включает разрабатываемые после него registry, capture port и системный PID-адаптер.
+
+## Компонентный срез системного кандидата и владельца очереди
+
+Следующие `make build` и `make test` прошли 726 тестов без failures:
+`.build/input-recovery-ownership-{build,test}.log`. К 688 добавлены 22 проверки
+registry/markers/gate, 13 RecoveryOperation/CapturePort и 3 SystemProcessIdentity.
+Чистый gate проверяет admission и однократный парный release, но не создаёт tap и
+не доказывает delivery/receiver ACK. Владелец очереди сохраняет sealed buffer при
+недоступной защите, выполняет detach только под подготовленным guard и удерживает
+batch при отказе adopt. Независимый review обнаружил и исправил ложный cached ack
+другому coordinator; повторное подтверждение теперь связано с тем же живым объектом.
+Отдельные барьерные тесты проверяют порядок locks без gate→admission инверсии.
+
+PID-адаптер читает только идентичность процесса через proc_pidinfo вне callback:
+полный размер ответа, PID, отсутствие zombie, время рождения. Это свежая проверка,
+не бессрочная lease и не замена process-exit latch. Все три части получили независимый
+review; рабочий EventTapCore/Converter ещё не подключён, обычного replay permit нет.
+Данный срез предшествует системному bridge D7.2 и не заменяет его приёмку.

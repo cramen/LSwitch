@@ -249,6 +249,20 @@ handover; отклонённый новый ввод не выдаётся за 
 Разрешение обычного replay и отдельное завершение только собственных пакетов после
 OFF не приняты; существующие ограничения 4.2, lifecycle и живой приёмки сохраняются.
 
+#### D7.2. Системный probe с тем же реестром
+
+DEBUG-мост `RecoveryRecipientProbeBridge` связывает настоящий ledger и
+`RecipientGateState` с существующим own-PID worker и собственным NSTextView.
+Отдельный режим `--recovery-recipient-probe` сохраняет прежние исторические probes.
+До чтения shape callback сверяет sender PID и точный зарезервированный marker;
+marker проходит roundtrip до post и на head/tail. Подготовка пары не создаёт
+submission: token регистрируется непосредственно перед post, adapterReturned — после.
+Worker передаёт только ограниченные метаданные admission/реального отклонения;
+MainActor переносит их в ledger. Ни tail, ни окно наблюдения не создают receiverCompleted.
+Сценарий disable отправляет пару под worker barrier, затем закрывает поколение,
+выключает head и снимает barrier. Полученная доставка остаётся fail-open ограничением,
+а не положительной приёмкой. Production factory по-прежнему unavailable.
+
 ## Статус компонентной реализации — 2026-10-15
 
 Исторический локальный срез 686 тестов расширен двумя final-validation регрессиями:

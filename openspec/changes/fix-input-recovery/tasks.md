@@ -56,6 +56,12 @@ hide/delete и новое раскрытие инвалидируют прежн
 проверяют отсутствие чтений до принятого intent, повторные и чужие запросы, hide→show ABA,
 reentry и сохранность исходной очереди. Это компонентная реализация, задачи остаются открытыми.
 
+Дополнительно реализованы app-owned RecoveryOperation и scoped CapturePort: 13 тестов
+проверяют сохранность очереди после потери tap-владельца, unavailable handover,
+отказ/повтор adopt, foreign receiver, квоты и одновременные append/seal/detach.
+Seal выполняется до критической секции gate, чтобы исключить обратный порядок locks.
+Production CapturePort не подключён; обычного replay permit у нового пути ещё нет.
+
 ## 4. Допуск и системный приёмник
 
 - [ ] 4.1 Реализовать RecoveryAdmission с резервом одной pending-записи, 256 событий и 64 KiB логического UTF-16 payload, связанный с process instance, generation и готовностью gate. Проверка: unavailable/lost gate, уже pending recovery, превышение лимита и невозможность ограниченного handover отказывают до selection/Copy/Paste; приближение к порогу не обрезает уже удержанную очередь и не продлевает mutation lease 400 мс.
@@ -76,6 +82,13 @@ late-before-admission и намеренный disable fail-open на собст�
 D7.1 design описывает следующий чистый кандидат RecipientGateState/NativeDispatchRegistry:
 раздельные стадии отправки, bounded registry, парный Up и lost latch. Его тесты сами
 по себе не разрешают production prearm, обычный replay или own-only drain после OFF.
+
+Чистый кандидат реализован: 22 теста registry/markers/gate проверяют эти переходы,
+включая конкурентные release и loss. SystemProcessIdentity добавляет чтение PID+birth
+вне callback; 3 проверки используют собственный процесс и отрицательные контроли.
+Общий build/test после исправления foreign-coordinator ack: 726/726, 0 failures;
+логи `.build/input-recovery-ownership-{build,test}.log`, независимые review CLEAN.
+Системный bridge D7.2 и production wiring не входят в этот результат.
 
 ## 5. Локальный интерфейс восстановления
 
@@ -107,8 +120,9 @@ handover и graceful quit реальной очереди этим preview не 
 Следующий компонентный build/test 23:04:21 МСК — 688 тестов, 0 failures/skipped;
 логи `.build/input-recovery-finalization-{build,test}.log`. Он включает исправления
 final-validation race и UI-счётчиков, но не будущие candidate gate/wiring-файлы.
-Сохранённый CI ba4b7d6 завершился тремя ошибками strict SwiftLint; новый CI должен
-подтвердить checkpoint. Готовность runtime не следует из количества компонентных тестов.
+CI `06a95f7` подтвердил checkpoint 688: build/test и strict SwiftLint без нарушений.
+Следующий локальный срез 726 ещё требует собственного CI. Готовность runtime
+не следует из количества компонентных тестов.
 
 Всего 14 задач. План готовит реализацию, но не объявляет system gate или recovery UI
 готовым исправлением. Реализация чистых контрактов допускается первой; включение
