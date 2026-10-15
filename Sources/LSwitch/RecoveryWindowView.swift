@@ -221,7 +221,7 @@ final class RecoveryWindowView: NSView {
     private func mousePhaseText(_ phase: RecoveryMousePhase) -> String {
         switch phase {
         case .down: return "нажатие"
-        case .up: return "отпускание"
+        case .release: return "отпускание"
         case .drag: return "перетаскивание"
         }
     }

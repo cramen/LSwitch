@@ -18,7 +18,7 @@ public enum RecoveryEditingKey: Equatable, Sendable {
 }
 
 public enum RecoveryMouseButton: Equatable, Sendable { case left, right, other }
-public enum RecoveryMousePhase: Equatable, Sendable { case down, up, drag }
+public enum RecoveryMousePhase: Equatable, Sendable { case down, release, drag }
 
 public enum RecoveryNonTextEvent: Equatable, Sendable {
     case keyRelease, modifierChange, modifiedKey

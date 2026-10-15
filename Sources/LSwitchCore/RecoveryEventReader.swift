@@ -30,13 +30,13 @@ struct RecoveryEventReader {
     private static let statelessCaps = CGEventFlags(rawValue: 0x0100_0080)
     private static let mouseEvents: [CGEventType: RecoveryNonTextEvent] = [
         .leftMouseDown: .mouse(button: .left, phase: .down),
-        .leftMouseUp: .mouse(button: .left, phase: .up),
+        .leftMouseUp: .mouse(button: .left, phase: .release),
         .leftMouseDragged: .mouse(button: .left, phase: .drag),
         .rightMouseDown: .mouse(button: .right, phase: .down),
-        .rightMouseUp: .mouse(button: .right, phase: .up),
+        .rightMouseUp: .mouse(button: .right, phase: .release),
         .rightMouseDragged: .mouse(button: .right, phase: .drag),
         .otherMouseDown: .mouse(button: .other, phase: .down),
-        .otherMouseUp: .mouse(button: .other, phase: .up),
+        .otherMouseUp: .mouse(button: .other, phase: .release),
         .otherMouseDragged: .mouse(button: .other, phase: .drag)
     ]
     private let onRead: (() -> Void)?
@@ -97,11 +97,11 @@ struct RecoveryEventReader {
         if let editing = Self.editingKey(code) { return .nonText(.editingKey(editing)) }
         let flags = event.flags
         let commands: CGEventFlags = [.maskCommand, .maskControl]
-        if !flags.intersection(commands.union(Self.deviceCommand).union(Self.deviceControl)).isEmpty {
+        if !flags.isDisjoint(with: commands.union(Self.deviceCommand).union(Self.deviceControl)) {
             return .nonText(.modifiedKey)
         }
         let uncertain: CGEventFlags = [.maskAlternate, .maskSecondaryFn]
-        if !flags.intersection(uncertain.union(Self.deviceOption)).isEmpty {
+        if !flags.isDisjoint(with: uncertain.union(Self.deviceOption)) {
             return .unresolved(.modifierDependentInput)
         }
         // CGEventTypes.h: kCGEventFlagMaskNonCoalesced — metadata coalescing мыши/пера, не команда.
