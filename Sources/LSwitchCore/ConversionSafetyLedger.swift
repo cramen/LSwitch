@@ -11,6 +11,7 @@ public final class ConversionSafetyLedger {
     public private(set) var recordedCleanup: ConversionSafetyCleanupEvidence?
 
     private var entries: [ConversionSafetySubmissionToken: ConversionSafetyEntry] = [:]
+    private var outstandingKeyDebt = Set<ConversionSafetySubmissionToken>()
     private var lastOrdinal: UInt64 = 0
     private var usesRecordedCleanup = false
     private var cleanupRevision: UInt64 = 0
@@ -24,6 +25,7 @@ public final class ConversionSafetyLedger {
     public var hasEditorMutation: Bool { entries.values.contains { $0.kind.changesEditor } }
     public var hasUnresolvedSubmissions: Bool { entries.values.contains { $0.resolution == nil } }
     public var hasUnknownSubmissions: Bool { entries.values.contains { $0.unknown && $0.resolution == nil } }
+    public var hasOutstandingKeyDebt: Bool { !outstandingKeyDebt.isEmpty }
     public var permitsOrdinarySubmission: Bool { decision == nil && !encounteredUnknown }
 
     /// Вызывается после подготовки/guards, но ДО setter/post. Токен не заменяет системный допуск.
@@ -54,6 +56,17 @@ public final class ConversionSafetyLedger {
         if entry.kind.changesEditor, observation == .unknown || observation == .receiverCompleted {
             invalidateCleanup()
         }
+        return true
+    }
+
+    /// Обработка Down не доказывает отпускание клавиши. Отдельный факт не стирается cleanup/readback.
+    /// Неподтверждённый баланс первой версии сохраняется до recovery без автоматического снятия.
+    @discardableResult
+    public func recordOutstandingKeyDebt(for token: ConversionSafetySubmissionToken) -> Bool {
+        guard decision == nil, token.operation == operation, let entry = entries[token],
+              entry.kind != .balancingRelease, entry.resolution != .preventedBeforeAdmission,
+              outstandingKeyDebt.insert(token).inserted else { return false }
+        encounteredUnknown = true
         return true
     }
 
@@ -103,7 +116,8 @@ public final class ConversionSafetyLedger {
         // Старый аргумент поддержан только до opt-in в записываемое evidence.
         let currentCleanup = usesRecordedCleanup ? recordedCleanup ?? .recoveryUnconfirmed : requestedCleanup
         let cleanup = normalizedCleanup(currentCleanup)
-        let replay = ordinaryRouteValid && !hasUnresolvedSubmissions && cleanup != .recoveryUnconfirmed
+        let replay = ordinaryRouteValid && !hasUnresolvedSubmissions && !hasOutstandingKeyDebt
+            && cleanup != .recoveryUnconfirmed
         let hasCompletedText = entries.values.contains { $0.kind == .text && $0.resolution == .receiverCompleted }
         let result = ConversionSafetyDecision(
             operation: operation, text: text, cleanup: cleanup,

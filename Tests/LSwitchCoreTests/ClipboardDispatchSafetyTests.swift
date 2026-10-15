@@ -84,12 +84,12 @@ final class ClipboardDispatchSafetyTests: XCTestCase {
         var replies: [ClipboardDispatchReply] = []
         let hooks = hooks(ledger, onReturn: { replies.append($0) })
         var applied = false
-        let status = MenuCommand.dispatch(.paste, isValid: { true }, hooks: hooks) {
+        let status = MenuCommand.dispatch(.paste, isValid: { true }, hooks: hooks, perform: {
             XCTAssertEqual(ledger.submissionCount, 1)
             XCTAssertTrue(replies.isEmpty)
             applied = true
             return .cannotComplete
-        }
+        })
         XCTAssertTrue(applied)
         XCTAssertEqual(status, .cannotComplete)
         XCTAssertEqual(replies.first?.status, .cannotComplete)
@@ -99,11 +99,41 @@ final class ClipboardDispatchSafetyTests: XCTestCase {
     @MainActor
     func testMenuDeniedBeforeSubmissionDoesNotCallAction() {
         let hooks = ClipboardDispatchHooks(beforeSend: { _ in nil }, didReturn: { _ in XCTFail("Нет отправки") })
-        let result = MenuCommand.dispatch(.copy, isValid: { true }, hooks: hooks) {
+        let result = MenuCommand.dispatch(.copy, isValid: { true }, hooks: hooks, perform: {
             XCTFail("AXPress не должен вызываться")
             return .success
-        }
+        })
         XCTAssertNil(result)
+    }
+
+    @MainActor
+    func testCompletedModifierWithDeniedReleaseCannotUseNoOwnedMutationForReplay() async throws {
+        let ledger = ConversionSafetyLedger(generation: 5)
+        var posted: [CGEventType] = []
+        let hooks = ClipboardDispatchHooks(beforeSend: { kind in
+            kind == .modifier ? ledger.willSubmit(kind, operation: ledger.operation) : nil
+        }, didReturn: { ledger.observe(.receiverCompleted, for: $0.submission) }, didLeaveDebt: {
+            XCTAssertTrue(ledger.recordOutstandingKeyDebt(for: $0))
+        })
+        let sent = await KeyboardEmitter.send(
+            .paste, targetPID: 127, isValid: { true }, beforeKeyDown: { true }, hooks: hooks,
+            delivery: .init(post: { event, target in
+                XCTAssertEqual(target, 127)
+                posted.append(event.type)
+            }, pause: {})
+        )
+        XCTAssertFalse(sent)
+        XCTAssertEqual(posted, [.flagsChanged])
+        XCTAssertEqual(ledger.submissionCount, 1)
+        XCTAssertFalse(ledger.hasEditorMutation)
+        XCTAssertFalse(ledger.hasUnresolvedSubmissions)
+        XCTAssertTrue(ledger.hasOutstandingKeyDebt)
+        let final = try XCTUnwrap(ledger.finish(
+            operation: ledger.operation, text: .unchangedByOperation,
+            cleanup: .recoveredObserved, ordinaryRouteValid: true
+        ))
+        XCTAssertEqual(final.cleanup, .noOwnedMutation)
+        XCTAssertEqual(final.input, .recoveryRequired)
     }
 
     @MainActor

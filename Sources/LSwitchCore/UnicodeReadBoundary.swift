@@ -5,6 +5,7 @@ extension UnicodeEnvironment {
 
     /// Raw getters доступны только проверяемой границе в этом файле.
     struct Context {
+        fileprivate let bindingIdentity = UUID()
         fileprivate let processID: pid_t
         fileprivate let isCurrent: @MainActor @Sendable () -> Bool
         fileprivate let rawSnapshot: @MainActor (TextReadPermission) -> UnicodeTextSnapshot?
@@ -37,6 +38,9 @@ struct UnicodeReadBoundary {
     let targetCheck: ConversionReceipt.TargetCheck
 
     var processID: pid_t { context.processID }
+    var receiverTarget: UnicodeReceiverTarget {
+        UnicodeReceiverTarget(identity: context.bindingIdentity, processID: context.processID)
+    }
 
     var isValid: Bool {
         !Task.isCancelled && request.isValid() && activeSource() == source && !Task.isCancelled

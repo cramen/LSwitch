@@ -45,7 +45,8 @@ extension ClipboardTransaction {
                   self.cleanupAllowed else { return false }
             return true
         }
-        if case .success = result { return safety.permitsReceipt && valid ? result : .failed }
+        // Внешний validity callback может закрыть ledger; последнее решение после него должно быть чистым.
+        if case .success = result { return valid && safety.permitsReceipt ? result : .failed }
         if let ledger = request.safetyLedger,
            ledger.hasEditorMutation || ledger.hasUnresolvedSubmissions || ledger.encounteredUnknown { return .failed }
         return result

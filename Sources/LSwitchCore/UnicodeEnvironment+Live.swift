@@ -22,14 +22,13 @@ extension UnicodeEnvironment {
             }, activeSource: { UnicodeInputSource.current() }, canPost: { CGPreflightPostEventAccess() },
             prepare: { UnicodeEventEmitter.prepare($0, targetPID: $1) },
             sendSelection: { command, processID, before, after in
-                let mapped: ClipboardCommand
-                switch command {
-                case .select(let count): mapped = .selectCharacters(count)
-                case .collapse: mapped = .collapseSelection
-                }
-                // Только общий генератор стрелок; clipboard-среда и Copy/Paste не создаются.
-                return KeyboardEmitter.sendBatch(mapped, targetPID: processID, isValid: before, afterBatch: after)
-            }, pause: { await SelectionSettlement.pause() }
+                await KeyboardEmitter.sendSelection(command, targetPID: processID, before: before, after: after)
+            }, pause: { await SelectionSettlement.pause() },
+            sendSelectionTracked: { command, processID, before, after, hooks in
+                await KeyboardEmitter.sendSelection(
+                    command, targetPID: processID, before: before, after: after, hooks: hooks
+                )
+            }
         )
     }
 }

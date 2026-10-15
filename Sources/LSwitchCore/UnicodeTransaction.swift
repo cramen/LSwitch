@@ -2,30 +2,43 @@ import Foundation
 
 @MainActor
 final class UnicodeTransaction {
+    struct PreparedMutation {
+        let packet: UnicodePreparedPacket
+        let safety: UnicodeMutationSafety
+    }
+
     let environment: UnicodeEnvironment
     let boundary: UnicodeReadBoundary
     let plan: AXReplacementPlan
     let keyboardPlan: KeyboardSelectionPlan?
     let packet: UnicodePreparedPacket
+    let safety: UnicodeMutationSafety
     var createdSelection = false
     var posted = false
+    var cleanupState: (text: String, selection: NSRange)?
 
     init(
         environment: UnicodeEnvironment, boundary: UnicodeReadBoundary,
         plan: AXReplacementPlan, keyboardPlan: KeyboardSelectionPlan?,
-        packet: UnicodePreparedPacket
+        prepared: PreparedMutation
     ) {
         self.environment = environment
         self.boundary = boundary
         self.plan = plan
         self.keyboardPlan = keyboardPlan
-        self.packet = packet
+        self.packet = prepared.packet
+        self.safety = prepared.safety
     }
 
     var request: ConversionRequest { boundary.request }
     var valid: Bool { boundary.isValid }
 
     func run() async -> ConversionResult {
+        let result = await runOperation()
+        return finalizeSafety(result)
+    }
+
+    private func runOperation() async -> ConversionResult {
         guard matches(text: plan.text, selection: plan.selection), request.beginMutation(), valid else {
             return .blocked
         }
@@ -41,7 +54,8 @@ final class UnicodeTransaction {
             return await failed(.selectionChanged)
         }
         request.diagnostics?.mark(.selectionSettled)
-        posted = packet.post {
+        guard safety.requireCompletion(.selectionSettled) else { return await failed(.selectionFailed) }
+        posted = postPacket {
             guard self.matches(text: self.plan.text, selection: self.plan.range), self.environment.canPost() else {
                 return false
             }
@@ -50,6 +64,7 @@ final class UnicodeTransaction {
         }
         guard posted else { return await failed(.requestInvalid) }
         guard await confirm() else { return await failed(.textNotConfirmed) }
+        guard safety.requireCompletion(.textConfirmed) else { return await failed(.textNotConfirmed) }
         request.diagnostics?.mark(.textConfirmed)
         return .success(plan.receipt)
     }
@@ -67,12 +82,14 @@ final class UnicodeTransaction {
         text: String, selection: NSRange, allowed: [NSRange], cleanup: Bool = false,
         initialObservation: UnicodeTextSnapshot? = nil
     ) async -> Bool {
-        await UnicodeSelectionSettlement.wait(
+        let settled = await UnicodeSelectionSettlement.wait(
             expected: (text, selection), allowedSelections: allowed,
             initialObservation: cleanup ? nil : initialObservation,
             canWait: { cleanup || !Task.isCancelled },
             readChecked: { self.read(cleanup: cleanup) }, pause: environment.pause
         )
+        if settled, request.safetyLedger != nil, selection.length == 0 { cleanupState = (text, selection) }
+        return settled
     }
 
     private func selectOwnRange(_ selection: KeyboardSelectionPlan)
@@ -80,10 +97,10 @@ final class UnicodeTransaction {
         createdSelection = true
         request.diagnostics?.mark(.selectionKeyboardRequested)
         var observation: UnicodeTextSnapshot?
-        let succeeded = await environment.sendSelection(
-            .select(selection.characterCount), boundary.processID,
-            { self.matches(text: self.plan.text, selection: self.plan.selection) },
-            {
+        let succeeded = await sendSelection(
+            .select(selection.characterCount),
+            before: { self.matches(text: self.plan.text, selection: self.plan.selection) },
+            after: {
                 // Повторный callback с partial/отказом не должен оставлять прежний exact seed.
                 observation = nil
                 guard let current = self.read(), current.text.utf16.elementsEqual(self.plan.text.utf16),
@@ -119,12 +136,12 @@ final class UnicodeTransaction {
 
     private func failed(_ reason: ConversionDiagnostics.Rejection) async -> ConversionResult {
         request.diagnostics?.reject(reason)
-        await cleanup()
+        _ = await cleanup()
         return createdSelection || posted ? .failed : .blocked
     }
 
-    private func cleanup() async {
-        guard let state = read(cleanup: true) else { return }
+    private func cleanup() async -> ConversionSafetyCleanupEvidence {
+        guard let state = read(cleanup: true) else { return .recoveryUnconfirmed }
         let inserted = NSRange(location: plan.range.location, length: plan.replacement.utf16.count)
         if posted, state.matches(text: plan.resultingText, selection: inserted) {
             _ = await collapse(text: state.text, selection: inserted, caret: plan.finalSelection, cleanup: true)
@@ -132,23 +149,24 @@ final class UnicodeTransaction {
                   state.text.utf16.elementsEqual(plan.text.utf16), keyboardPlan.ownedRanges.contains(state.selection) {
             // EOF делает Right безопасным при ignored и запоздалом batch. Readback не ACK.
             let recognized = { self.recognizesOriginalRange(keyboardPlan.ownedRanges, cleanup: true) }
-            let sent = await environment.sendSelection(.collapse, boundary.processID, recognized, recognized)
+            let sent = await sendSelection(.collapse, before: recognized, after: recognized, cleanup: true)
             if sent {
                 _ = await settle(text: plan.text, selection: plan.selection,
                                  allowed: keyboardPlan.ownedRanges, cleanup: true)
             }
         }
+        return cleanupState == nil ? .recoveryUnconfirmed : .recoveredObserved
     }
 
     private func collapse(text: String, selection: NSRange, caret: NSRange, cleanup: Bool = false) async -> Bool {
-        let sent = await environment.sendSelection(
-            .collapse, boundary.processID,
-            { self.matches(text: text, selection: selection, cleanup: cleanup) },
-            {
+        let sent = await sendSelection(
+            .collapse,
+            before: { self.matches(text: text, selection: selection, cleanup: cleanup) },
+            after: {
                 guard let current = self.read(cleanup: cleanup) else { return false }
                 return current.text.utf16.elementsEqual(text.utf16)
                     && [selection, caret].contains(current.selection)
-            }
+            }, cleanup: cleanup
         )
         guard sent else { return false }
         return await settle(text: text, selection: caret, allowed: [selection, caret], cleanup: cleanup)

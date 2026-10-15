@@ -42,6 +42,8 @@ struct RecoveryTestHold {
     func append(_ text: String = "a", type: CGEventType = .keyDown) throws -> RecoveryEventAdmission {
         let event = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: type == .keyDown))
         event.type = type
+        event.flags = []
+        event.setIntegerValueField(.keyboardEventAutorepeat, value: 0)
         let units = Array(text.utf16)
         event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: units)
         return admission.admit(utf16Units: units.count, binding: binding) {
@@ -63,11 +65,13 @@ final class RecoveryTestFixture {
     let target: RecoveryProcessIdentity
     let coordinator: RecoveryCoordinator
 
-    init() throws {
+    init(eventReader: RecoveryEventReader? = nil) throws {
         let gate = RecoveryTestGate()
         self.gate = gate
         target = try XCTUnwrap(RecoveryProcessIdentity(processID: 123, birthSeconds: 1, birthMicroseconds: 2))
-        coordinator = RecoveryCoordinator(gateFactory: RecoveryGateFactory(prepare: { gate.prepare($0) }))
+        coordinator = RecoveryCoordinator(
+            gateFactory: RecoveryGateFactory(prepare: { gate.prepare($0) }), eventReader: eventReader
+        )
     }
 
     func begin() throws -> RecoveryTestHold {

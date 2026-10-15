@@ -27,7 +27,7 @@ struct UnicodeTextSnapshot {
 /// Эта граница не содержит ни pasteboard, ни Copy/Paste, ни AX-записи текста.
 @MainActor
 struct UnicodeEnvironment {
-    enum SelectionCommand: Equatable { case select(Int), collapse }
+    typealias SelectionCommand = NativeSelectionCommand
 
     var captureContext: () -> Context?
     var activeSource: () -> UnicodeInputSource?
@@ -37,4 +37,9 @@ struct UnicodeEnvironment {
         SelectionCommand, pid_t, @escaping @MainActor () -> Bool, @escaping @MainActor () -> Bool
     ) async -> Bool
     var pause: () async -> Void
+    var receiverContract: UnicodeReceiverContract?
+    var sendSelectionTracked: (
+        (SelectionCommand, pid_t, @escaping @MainActor () -> Bool,
+         @escaping @MainActor () -> Bool, ConversionDispatchHooks) async -> Bool
+    )?
 }

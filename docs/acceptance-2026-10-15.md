@@ -1024,3 +1024,97 @@ StartupCommands, чтобы main сохранял лимит строгого li
 в работающей 513b остаётся открытым. Задачи отмечены частично выполненными, без
 архивирования. Следующий этап — явное раскрытие сохранённых событий и системная
 интеграция; принятие own-PID probes не переносится на сторонние редакторы.
+
+## Компонентная проверка Unicode, раскрытия и окна восстановления
+
+Локальный срез 22:55:46 МСК: **686 тестов, 0 failures, 0 skipped**, сборка прошла.
+Логи `.build/input-recovery-window-{build,test}.log`; отдельная сборка preview —
+`.build/input-recovery-preview-build.log`. Это проверка до последующих исправлений
+final-validation race и UI-счётчиков, а не окончательный результат следующего checkpoint.
+
+| Новые проверки после среза 616 | Количество | Граница доказательства |
+| --- | --- | --- |
+| Unicode/safety | 21: 13 UnicodeSafety, 4 TrackedEmitter, 3 Debt и 1 clipboard-регрессия | Модели bound receiver, per-send журнал и самостоятельный key debt; без production binding |
+| Projection/reader | 21: 6 Projection и 15 EventReader | Строгий UTF-16, бюджет, ordinal, modifier bits и redacted descriptions; только eventPayloadOnly |
+| Reveal | 12 | Одноразовый intent, отсутствие чтений до принятия, hide/delete/reentry/ABA и сохранность оригиналов |
+| UI session | 16: 7 Session и 9 Deletion | RAM-черновики, metadata-first, hide/reopen, подмена записи и подтверждение удаления |
+
+Unicode не выдаёт late/cached observation за завершение отправки. Реально отправленный
+Down без необходимого Up требует recovery даже при noOwnedMutation и наблюдаемой
+безопасной каретке. Projector не вычисляет итоговую строку, не нормализует UTF-16,
+не исполняет команды и не выдаёт собственные CGEvent наружу. Документированные
+NonCoalesced, L/R Shift и stateless Caps проверены на созданных в памяти событиях;
+device-specific Cmd/Control/Option и неизвестные bits не разрешают текстовую проекцию.
+Эти fixtures не являются приёмкой физической клавиатуры или IME.
+
+Сохранённый CI `ba4b7d6` завершился ошибкой strict SwiftLint: два нарушения trailing
+closure и complexity 11 в tracked keyboard emitter. Лог
+`.build/checkpoint-ba4b7d6-ci-failed.log`. Локальные 686 PASS не заменяют новый зелёный CI.
+
+## DEBUG preview recovery-окна: отдельная живая проверка
+
+Изолированный кандидат на базе `ba4b7d6` описан в
+`.build/recovery-window-candidate-manifest.json`; SHA executable:
+`0abf229026a171e62b7d89ae4eb9a0fdac433cf48c624cb98dac05d3b9f3359f`.
+Preview использует настоящий coordinator/reveal/delete intent, но только фиксированную
+RAM-очередь, synthetic target и fake gate. В UI указано «Тестовый редактор», protection
+остаётся unverified. Реального capture, CGEvent post, AX-конвертации и запросов TCC нет;
+внутренний AppKit applicationDefined wake служит только выходу из event loop.
+
+Первый прогон подтвердил следующие действия без сохранения содержимого fixture в протоколе:
+
+- До раскрытия AX показывал только метаданные: 8 событий, 38 байт; текстовых payload-элементов не было.
+- Явный reveal показал два Unicode-фрагмента, включая decomposed combining mark и NBSP.
+  Команды, отпускание, мышь и Option остались записями событий и не исполнялись.
+- Редактируемая ASCII-копия прошла Cmd+A/C, Backspace/Cmd+V и сохранилась после
+  Escape/Cmd+R, нового раскрытия и открытия редактирования.
+- Попытка ввода кириллицы через CUA typeText в этом опыте не доставила символы.
+  Редактирование проверено на ASCII; это ограничение попытки ввода инструментом,
+  а не установленный дефект продукта или положительная проверка кириллицы.
+- Cancel удаления сохранил запись. Confirm был принят coordinator, но снимок UI
+  после удаления прерван ограничением времени preview.
+
+`.build/recovery-window-preview.json`: status=timeout, elapsed=120066 мс,
+confirmedDeletions=1, cancelledDeletions=1, payloadDeletedByAction=true,
+eventsAtExit=0, utf16BytesAtExit=0, cleanupCompleted=true. Stderr — 0 байт.
+
+Аудитор clipboard держал исходный пустой буфер в памяти: SHA с префиксом `338a3d…`.
+После ручного копирования отдельный checkpoint содержал один тип и SHA с префиксом
+`9a14…`; последующий compare подтвердил unchanged=true. При завершении аудитора
+исходный пустой fingerprint восстановлен, matchesOriginal=true. Содержимое буфера
+в протокол не записано. Это не утверждение неизменности буфера на всём интервале:
+разрешённое ручное копирование намеренно создало новый checkpoint.
+
+Второй прогон `.build/recovery-window-preview-delete.json` подтвердил удаление уже
+визуально: CUA увидел disabled Delete, отсутствие reveal и payload. JSON содержит
+confirmedDeletions=1, payloadDeletedByAction=true, eventsAtExit=0, status=quit,
+elapsed=30608 мс и cleanupCompleted=true; stderr снова пуст. Найден отдельный дефект:
+после удаления метаданные UI всё ещё показывали 8 событий/38 байт. Исправление
+displayedMetadata до нулевых счётчиков внесено в source и существующий unit-тест.
+
+Независимый review после среза 686 также выявил гонку final external isValid после
+permitsReceipt в clipboard/Unicode. Исправление и две дополнительные регрессии не
+входят в результат 686. Следующий общий build/test завершился в 23:04:21 МСК:
+**688 тестов, 0 failures, 0 skipped**; логи
+`.build/input-recovery-finalization-{build,test}.log`. Будущие candidate gate/wiring
+изменения не входят в этот компонентный checkpoint.
+
+Счётчики отдельно приняты на новой живой сборке SHA
+`7673e42881060274d98efcd5a5a70c870db1ca1e2bec026e04e898047d2745fb`, manifest
+`.build/recovery-window-candidate-counts-manifest.json`. После Confirm CUA увидел
+0 событий/0 байт, disabled Delete и отсутствие reveal/payload. Итог
+`.build/recovery-window-preview-counts.json`: confirmedDeletions=1,
+payloadDeletedByAction=true, eventsAtExit=0, utf16BytesAtExit=0, status=quit,
+elapsed=36797 мс, cleanupCompleted=true; stderr — 0 байт. Clipboard в этих повторных
+проверках не использовался.
+
+После второго preview запрос CUA getState уже завершённого кандидата запустил лишний
+экземпляр без аргументов. Он закрыт; после последующего Quit состояние кандидата
+через CUA больше не запрашивалось. В финале подтверждён один обычный LSwitch, PID 91006;
+исходный bundle 513b не заменялся.
+
+Timeout 120 секунд — граница диагностического preview, не TTL production recovery.
+Завершение fixture не принимает graceful quit с реальной удержанной очередью.
+Working runtime не создаёт ledger и не передаёт очередь в RAM coordinator; gate,
+handover, OFF/quit lifecycle и production P1 остаются открытыми. `fix-input-recovery`
+сохраняет **2/14** выполненных задач и не архивируется.

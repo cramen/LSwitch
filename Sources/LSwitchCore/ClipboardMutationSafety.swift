@@ -8,6 +8,7 @@ final class ClipboardMutationSafety {
     private var pending: [ConversionSafetySubmissionToken: ClipboardDispatchReply] = [:]
     private var kinds: [ConversionSafetySubmissionToken: ConversionSafetySubmissionKind] = [:]
     private var completedText = false
+    private var debt = Set<ConversionSafetySubmissionToken>()
     private(set) var submittedText = false
     private(set) var cleanup: ConversionSafetyCleanupEvidence = .noOwnedMutation
 
@@ -17,7 +18,7 @@ final class ClipboardMutationSafety {
         guard let ledger = request.safetyLedger else { return true }
         guard let bound = contract?.bind(context.identity, ledger.operation),
               bound.contextIdentity == context.identity, bound.operation == ledger.operation,
-              bound.isCurrent(), !Task.isCancelled, ledger.permitsOrdinarySubmission,
+              bound.isCurrent(), bound.canBalance(), !Task.isCancelled, ledger.permitsOrdinarySubmission,
               !ledger.hasUnresolvedSubmissions else { return false }
         binding = bound
         return true
@@ -32,7 +33,11 @@ final class ClipboardMutationSafety {
         guard request.safetyLedger != nil else { return nil }
         return ClipboardDispatchHooks(beforeSend: { kind in
             self.beforeSend(kind, isValid: isValid)
-        }, didReturn: { self.didReturn($0) }, submissionCount: { self.request.safetyLedger?.submissionCount ?? 0 })
+        }, didReturn: { self.didReturn($0) }, submissionCount: { self.request.safetyLedger?.submissionCount ?? 0 },
+        didLeaveDebt: {
+            self.debt.insert($0)
+            self.request.safetyLedger?.recordOutstandingKeyDebt(for: $0)
+        })
     }
 
     private func beforeSend(
@@ -44,10 +49,10 @@ final class ClipboardMutationSafety {
             guard binding.canBalance() else { return nil }
             token = ledger.willSubmitCleanup(kind, operation: ledger.operation)
         } else if kind.isCleanup {
-            guard isValid(), binding.isCurrent() else { return nil }
+            guard isValid(), binding.isCurrent(), binding.canBalance() else { return nil }
             token = ledger.willSubmitCleanup(kind, operation: ledger.operation)
         } else {
-            guard isValid(), permitsOrdinary else { return nil }
+            guard isValid(), permitsOrdinary, binding.canBalance() else { return nil }
             token = ledger.willSubmit(kind, operation: ledger.operation)
         }
         if token != nil, kind.changesEditor { cleanup = .recoveryUnconfirmed }
@@ -96,14 +101,16 @@ final class ClipboardMutationSafety {
             return
         }
         cleanup = ledger.hasEditorMutation ? .recoveryUnconfirmed : .noOwnedMutation
-        if ledger.hasEditorMutation, validateFresh() { cleanup = .recoveredObserved }
+        if ledger.hasEditorMutation, debt.isEmpty, validateFresh() { cleanup = .recoveredObserved }
+        if !debt.isEmpty { cleanup = .recoveryUnconfirmed }
         if !ledger.recordCleanup(cleanup, observation: ticket) { cleanup = .recoveryUnconfirmed }
     }
 
     var permitsReceipt: Bool {
         guard let ledger = request.safetyLedger else { return true }
         return !Task.isCancelled && ledger.decision == nil && !ledger.encounteredUnknown
-            && !ledger.hasUnresolvedSubmissions && completedText && cleanup == .recoveredObserved
+            && !ledger.hasUnresolvedSubmissions && !ledger.hasOutstandingKeyDebt
+            && completedText && cleanup == .recoveredObserved
             && ledger.recordedCleanup == cleanup
     }
 

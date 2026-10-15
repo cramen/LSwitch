@@ -25,27 +25,42 @@ struct RecoveryUserIntent: Equatable, Sendable {
     fileprivate let purpose: Purpose
 }
 
+/// Разрешение относится к одному явному раскрытию одной записи конкретным coordinator.
+struct RecoveryRevealIntent: Equatable, Sendable {
+    fileprivate let coordinator: UUID
+    fileprivate let record: UUID
+    fileprivate let nonce = UUID()
+}
+
 enum RecoveryQuitRequest: Equatable, Sendable {
     case allowed, handoverRequired, confirmationRequired(RecoveryUserIntent)
 }
 enum RecoveryQuitChoice: Sendable { case stay, deleteAndQuit }
 enum RecoveryUserDecisionResult: Equatable, Sendable { case deleted, stay, quitAllowed, stale }
 
-/// Владелец RAM не исполняет события, не раскрывает payload и не управляет системным gate или UI.
+/// Владелец RAM не исполняет события; payload раскрывается лишь по одноразовому явному intent.
 @MainActor
 final class RecoveryCoordinator {
+    private let identifier = UUID()
     private let gateFactory: RecoveryGateFactory
+    private let eventReader: RecoveryEventReader
     private var preparing: UUID?
     private var preparationValid = false
     private var reservation: PreparedRecoveryAdmission?
     private var record: StoredRecord?
     private var activeIntent: RecoveryUserIntent?
     private var resolvedIntent: (intent: RecoveryUserIntent, result: RecoveryUserDecisionResult)?
+    private var activeReveal: RecoveryRevealIntent?
+    private var revealRevision = UUID()
     private var permissionsAvailable = true
     private var secureInput = false
     private(set) var isEnabled = true
+    private(set) var revealedProjection: RecoveryProjection?
 
-    init(gateFactory: RecoveryGateFactory? = nil) { self.gateFactory = gateFactory ?? .unavailable }
+    init(gateFactory: RecoveryGateFactory? = nil, eventReader: RecoveryEventReader? = nil) {
+        self.gateFactory = gateFactory ?? .unavailable
+        self.eventReader = eventReader ?? RecoveryEventReader()
+    }
 
     var metadata: RecoveryMetadata? { record?.metadata }
     var hasPendingRecovery: Bool { record != nil }
@@ -138,8 +153,37 @@ final class RecoveryCoordinator {
         record?.protection = protectionStatus
     }
 
-    func hide() { record?.isVisible = false }
+    func hide() {
+        record?.isVisible = false
+        invalidateReveal()
+    }
+
     func show() { record?.isVisible = true }
+
+    func requestReveal() -> RecoveryRevealIntent? {
+        guard let record, record.isVisible, record.events != nil else { return nil }
+        let intent = RecoveryRevealIntent(coordinator: identifier, record: record.identifier)
+        invalidateReveal()
+        activeReveal = intent
+        revealRevision = intent.nonce
+        return intent
+    }
+
+    /// true означает принятый intent и опубликованную проекцию; отказ reader отражён в projection.failure.
+    /// Ни повтор, ни metadata getters не запускают reader. Оригинальная очередь не изымается.
+    @discardableResult
+    func reveal(_ intent: RecoveryRevealIntent) -> Bool {
+        guard intent.coordinator == identifier, let record, record.identifier == intent.record,
+              activeReveal == intent, revealRevision == intent.nonce,
+              record.isVisible, record.events != nil else { return false }
+        activeReveal = nil
+        guard let events = record.events else { return false }
+        let projection = eventReader.project(events: events, recordIdentifier: record.identifier)
+        guard self.record === record, record.isVisible, record.events != nil,
+              revealRevision == intent.nonce else { return false }
+        revealedProjection = projection
+        return true
+    }
 
     func requestDeletion() -> RecoveryUserIntent? {
         guard let record else { return nil }
@@ -151,7 +195,7 @@ final class RecoveryCoordinator {
         if let resolvedIntent, resolvedIntent.intent == intent { return resolvedIntent.result }
         guard let record, activeIntent == intent, intent.record == record.identifier,
               intent.purpose == .deletePayload else { return .stale }
-        record.events = nil
+        deletePayload(record)
         return resolve(intent, result: .deleted)
     }
 
@@ -176,7 +220,7 @@ final class RecoveryCoordinator {
         switch choice {
         case .stay: return resolve(intent, result: .stay)
         case .deleteAndQuit:
-            record.events = nil
+            deletePayload(record)
             return resolve(intent, result: .quitAllowed)
         }
     }
@@ -189,6 +233,17 @@ final class RecoveryCoordinator {
     }
 
     private var mayPrepare: Bool { isEnabled && permissionsAvailable && !secureInput }
+
+    private func invalidateReveal() {
+        activeReveal = nil
+        revealRevision = UUID()
+        revealedProjection = nil
+    }
+
+    private func deletePayload(_ record: StoredRecord) {
+        invalidateReveal()
+        record.events = nil
+    }
 
     private var protectionStatus: RecoveryProtectionStatus {
         if !isEnabled { return .interceptionOff }

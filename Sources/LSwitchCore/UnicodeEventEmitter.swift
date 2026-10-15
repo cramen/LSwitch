@@ -6,6 +6,19 @@ import Foundation
 @MainActor
 struct UnicodePreparedPacket {
     var post: (@escaping @MainActor () -> Bool) -> Bool
+    var postTracked: ((@escaping @MainActor () -> Bool, ConversionDispatchHooks) -> Bool)?
+
+    init(post: @escaping (@escaping @MainActor () -> Bool) -> Bool) {
+        self.post = post
+    }
+
+    init(
+        post: @escaping (@escaping @MainActor () -> Bool) -> Bool,
+        postTracked: @escaping (@escaping @MainActor () -> Bool, ConversionDispatchHooks) -> Bool
+    ) {
+        self.post = post
+        self.postTracked = postTracked
+    }
 }
 
 @MainActor
@@ -27,7 +40,7 @@ enum UnicodeEventEmitter {
     ) -> UnicodePreparedPacket? {
         guard targetPID > 0, let events = events(for: text) else { return nil }
         var consumed = false
-        return UnicodePreparedPacket { isValid in
+        return UnicodePreparedPacket(post: { isValid in
             guard !consumed, isValid() else { return false }
             consumed = true
             delivery(events.down, targetPID)
@@ -35,7 +48,20 @@ enum UnicodeEventEmitter {
             // Между Down/Up нет await и второго разрешения на текстовую запись.
             delivery(events.release, targetPID)
             return true
-        }
+        }, postTracked: { isValid, hooks in
+            guard !consumed, isValid() else { return false }
+            consumed = true
+            guard let down = hooks.beforeSend(.text) else { return false }
+            delivery(events.down, targetPID)
+            hooks.didReturn(.init(submission: down, transport: .unicode, status: nil))
+            if let release = hooks.beforeSend(.balancingRelease) {
+                delivery(events.release, targetPID)
+                hooks.didReturn(.init(submission: release, transport: .unicode, status: nil))
+            } else {
+                hooks.didLeaveDebt(down)
+            }
+            return true
+        })
     }
 
     static func events(for text: String) -> Events? {

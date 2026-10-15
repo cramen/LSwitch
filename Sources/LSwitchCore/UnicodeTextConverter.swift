@@ -22,7 +22,16 @@ public final class UnicodeTextConverter: ConversionEngine {
     }
 
     private func execute(_ request: ConversionRequest) async -> ConversionResult {
-        guard let captured = capture(request), let transaction = prepare(captured) else { return .blocked }
+        guard let captured = capture(request) else {
+            UnicodeMutationSafety(request: request).recordCleanup(validateFresh: { false })
+            return .blocked
+        }
+        let safety = UnicodeMutationSafety(request: captured.request)
+        guard safety.bind(target: captured.receiverTarget, contract: environment.receiverContract),
+              let transaction = prepare(captured, safety: safety) else {
+            safety.recordCleanup(validateFresh: { false })
+            return .blocked
+        }
         let result = await transaction.run()
         if case .success(let receipt) = result { return .success(receipt.checkingTarget(captured.targetCheck)) }
         return result
@@ -46,7 +55,7 @@ public final class UnicodeTextConverter: ConversionEngine {
         )
     }
 
-    private func prepare(_ captured: UnicodeReadBoundary) -> UnicodeTransaction? {
+    private func prepare(_ captured: UnicodeReadBoundary, safety: UnicodeMutationSafety) -> UnicodeTransaction? {
         let request = captured.request
         guard let snapshot = captured.read() else { return nil }
         guard let plan = AXReplacementPlan(
@@ -77,9 +86,13 @@ public final class UnicodeTextConverter: ConversionEngine {
             request.diagnostics?.reject(.unicodePreparationFailed)
             return nil
         }
+        if request.safetyLedger != nil, packet.postTracked == nil || environment.sendSelectionTracked == nil {
+            request.diagnostics?.reject(.unicodePreparationFailed)
+            return nil
+        }
         return UnicodeTransaction(
             environment: environment, boundary: captured,
-            plan: plan, keyboardPlan: keyboardPlan, packet: packet
+            plan: plan, keyboardPlan: keyboardPlan, prepared: .init(packet: packet, safety: safety)
         )
     }
 }
