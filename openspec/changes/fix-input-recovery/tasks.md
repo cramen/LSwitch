@@ -101,7 +101,17 @@ V4 захватывает через per-PID head: 2 события/16 байт 
 повторный prefix после detach подавлен без новых чтений. Challenge Down заблокирован;
 parent-редактор принимает ввод, после EOF child исходный фрагмент и RAM-черновик
 доступны повторно. Cleanup=true. Это отдельная проверка D7.3, не полный допуск 4.2;
-потеря защиты до adopt, modifiers/mouse/shortcuts и runtime wiring остаются открытыми.
+Controlled stop до adopt проверен следующим D7.4; реальные TCC/Secure Input,
+modifiers/mouse/shortcuts и runtime wiring остаются открытыми.
+
+D7.4 (2026-10-16) добавил storage-only передачу после локального quiescence.
+13 новых регрессий; полный build/test — 789 без failures/skipped, review CLEAN.
+Живой control подтвердил обычную доставку пары; stop до selection отказал до команд.
+Stop после capture и до adopt сохранил 2 события/16 байт, показал unavailable UI;
+раскрытие, редактирование и повторное раскрытие после EOF сохранили данные.
+Обычный режим перепроверен на том же v7. Этот компонентный и диагностический путь
+не закрывает production 3.1/3.2/4.2/6.2: runtime, реальный TCC/Secure Input,
+graceful quit и полная событийная матрица остаются открытыми.
 Подробности и точные бинарники — `docs/acceptance-2026-10-16.md`.
 
 DEBUG bridge с тем же Core registry добавил 5 модельных проверок callback-протокола;

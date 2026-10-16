@@ -76,8 +76,11 @@ extension RecoveryIsolationProbeController {
         Task {
             guard await driver.start(), !finished else { return finish("driver_unavailable") }
             guard peer.isRunning, prepareCapture(session: session, driver: driver),
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == peer.processID,
-                  session.beginFixtureSelectionCommand() else { return finish("capture_preparation_failed") }
+                  NSWorkspace.shared.frontmostApplication?.processIdentifier == peer.processID else {
+                return finish("capture_preparation_failed")
+            }
+            if fault == .beforeSelection { await refuseAfterDriverStop(); return }
+            guard session.beginFixtureSelectionCommand() else { return finish("capture_preparation_failed") }
             guard let sequence = peer.send(.selectFixture) else { return finish("selection_command_failed") }
             expectedSequence = sequence
             stage = .selecting
@@ -112,6 +115,7 @@ extension RecoveryIsolationProbeController {
         guard let session, let prefixPostedAt else { return finish("capture_missing") }
         let captured = session.report.capturedEvents
         guard captured == 2 || now - prefixPostedAt > 500_000_000 else { return }
+        if fault == .beforeAdoption, captured == 2 { stopBeforeStorageRetirement(); return }
         let adopted = session.finishForRecovery(on: captureTap)
         captureTap?.stop()
         guard adopted else { return finish("capture_handover_unavailable") }
@@ -127,6 +131,7 @@ extension RecoveryIsolationProbeController {
         case .prefixSnapshot: observePrefix(message)
         case .retiredPrefixSnapshot: observeRetiredPrefix(message)
         case .challengeSnapshot: observeChallenge(message)
+        case .storageSnapshot: observeStorageSnapshot(message)
         default: finish("unexpected_child_reply")
         }
     }

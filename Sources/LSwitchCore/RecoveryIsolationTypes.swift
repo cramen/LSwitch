@@ -32,6 +32,8 @@ public struct RecoveryIsolationReport: Sendable {
     public let adopted: Bool
     public let retainedBeforeAdoption: Bool
     public let preAdoptLossUnresolved: Bool
+    public let storageOnlyAdopted: Bool
+    public let retirementPending: Bool
     public let eventsRemaining: Int
     public let utf16BytesRemaining: Int
     public let ledgerSubmissionCount: Int

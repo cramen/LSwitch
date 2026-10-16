@@ -157,6 +157,8 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         return [
             "fixtureTextUnchanged": editor?.fixtureTextUnchanged ?? false,
             "fixtureSelectionUnchanged": editor?.fixtureSelectionUnchanged ?? false,
+            "controlTextMatches": editor?.controlTextMatches ?? false,
+            "controlSelectionMatches": editor?.controlSelectionMatches ?? false,
             "received": editor?.received ?? [], "changeCount": editor?.changeCount ?? 0,
             "foreignInput": editor?.foreignInput ?? false, "overflow": editor?.overflow ?? false,
             "active": NSApplication.shared.isActive, "focused": focused

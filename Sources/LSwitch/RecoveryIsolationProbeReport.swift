@@ -13,9 +13,12 @@ extension RecoveryIsolationProbeController {
             "senderPID": getpid(), "targetPID": peer.processID, "separateProcesses": getpid() != peer.processID,
             "prefixPosting": "postToPid", "postedPrefixCount": postedPrefixCount,
             "captureTransport": captureTransport.rawValue,
+            "faultMode": fault.rawValue, "expectedStopCompleted": expectedStopCompleted,
+            "preMutationRefusalObserved": preMutationRefusalObserved,
+            "storageRecoveryObserved": storageRecoveryObserved,
             "postedRetiredPrefixCount": postedRetiredPrefixCount, "retiredPrefixBlocked": retiredPrefixBlocked,
             "postedChallengeCount": postedChallengeCount, "prefixReceiverUnchanged": prefixUnchanged,
-            "challengeBlocked": challengeBlocked, "observationComplete": prefixUnchanged && challengeBlocked,
+            "challengeBlocked": challengeBlocked, "observationComplete": observationsComplete,
             "peerLossObserved": peerLossObserved, "childAbortObserved": childAbortObserved,
             "protectionLossObserved": protectionLossObserved,
             "childStderrBytes": childStderrBytes,
@@ -52,7 +55,8 @@ extension RecoveryIsolationProbeController {
             "inputClaimedForRecovery": value.inputClaimedForRecovery,
             "payloadDeleted": value.payloadDeleted, "revealCount": value.revealCount,
             "retainedBeforeAdoption": value.retainedBeforeAdoption,
-            "preAdoptLossUnresolved": value.preAdoptLossUnresolved
+            "preAdoptLossUnresolved": value.preAdoptLossUnresolved,
+            "storageOnlyAdopted": value.storageOnlyAdopted, "retirementPending": value.retirementPending
         ]
     }
 

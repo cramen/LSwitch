@@ -116,15 +116,69 @@ replayAuthorized/productionGateAccepted=false. Обычный LSwitch восст
 Обычный LSwitch восстанавливался после опытов; PuntoSwitcher/Caramba не запускались.
 Автоматических обращений к clipboard и payload-журналов в опыте нет.
 
+## Storage-only передача после потери защиты
+
+D7.4 добавляет отдельное завершение локального capture: router больше не выдаёт
+новые tickets и ждёт нулевого числа уже вошедших callbacks, включая count/copy/counters.
+Связанный с конкретным seal одноразовый proof разрешает только передачу RAM-владения.
+Ожидание возвращает pending без блокировки MainActor; gate, replay, receipt и
+unknown/key debt не переопределяются. Изначальный допуск и protected finish не ослаблены.
+
+Независимый review выявил и закрыл два случая: чужой seal с тем же binding не должен
+отравлять кеш proof; уже отделённый private batch должен переживать потерю gate до
+adopt без повторного detach/claim. Добавлены 13 регрессий, targeted — 39/0 failures,
+полный `make build`/`make test` — **789 тестов без failures/skipped**.
+Логи `.build/recovery-retirement-targeted-tests.log`,
+`.build/recovery-storage-final-{build,test}.log`; review Core и App — CLEAN.
+
+Контроль receiver без tap/gate/capture выполнен на SHA
+`fdaa01a48881e290bfe73fd157cffb1225750f3ea230608645340b8c7f691f38`:
+два пакета дошли до обычного dispatch, exact text/caret=true, changeCount=1.
+За 529 мс получены финальный ответ, EOF, child exit 0 и cleanup=true; stderr=0.
+Это положительный контроль чувствительности receiver, не safety PASS.
+Локаторы `.build/recovery-isolation-v5-control.{jsonl,stderr}`,
+`.build/recovery-isolation-v5-manifest.json`.
+
+Отказ до selection проверен на SHA
+`4f057bb6f7f02f9ae83669603ed466a5dd0aa52670918e276d8d9ed1db654365`:
+настоящий test driver остановлен, beginFixtureSelectionCommand отказал,
+submission/capture/posted=0, исходный текст неизменён, changeCount=0.
+Итог pre_mutation_refused, 385 мс, child exit 0, cleanup=true, stderr=0.
+Локаторы `.build/recovery-isolation-v6-preselect.{jsonl,stderr}`,
+`.build/recovery-isolation-v6-manifest.json`.
+
+Финальный кандидат SHA
+`73feec6610fe03c22e344b6e6efb0872d9ea0b69f9614d1a31d8480a83754082`
+в режиме stop-before-adopt действительно остановил driver после capture двух событий,
+но до передачи очереди. За 405 мс получено storage_ready:
+storageOnlyAdopted=true, events=2/bytes=16, reads=2, неизвестная selection-команда
+остаётся в ledger. В child received=[], текст/выделение неизменны, changes=0.
+После stop новые клавиши в child не отправлялись. CUA подтвердил unavailable-предупреждение,
+скрытый payload, явное раскрытие, редактирование копии и сохранность исходного фрагмента
+и черновика после Cmd+E/EOF и повторного раскрытия. Clipboard не использовался.
+Финал operator_finished через 58643 мс: child exit 0, cleanup=true, stderr=0,
+revealCount=2, прежние events/bytes/reads. Локаторы:
+`.build/recovery-isolation-v7-storage.{jsonl,stderr}`,
+`.build/recovery-isolation-v7-storage-ui.json`, `.build/recovery-isolation-v7-manifest.json`.
+
+Тот же v7 повторил обычный режим: capture2/16, поздний prefix подавлен,
+challenge Down заблокирован, Release дошёл без изменения текста; storageOnlyAdopted=false.
+Interactive-ready через 778 мс, финал через 18771 мс, child exit 0, cleanup=true.
+Локаторы `.build/recovery-isolation-v7-normal.{jsonl,stderr}`.
+Driver в финальном JSON — явно сохранённый snapshot **до** cleanup; верхний
+cleanupCompleted относится к завершившемуся shutdown. Рабочий bundle после всех
+опытов восстановлен с прежним SHA; PuntoSwitcher/Caramba не запускались.
+
 ## Оставшиеся границы
 
-Потеря защиты до adopt сохраняет sealed buffer, но его раскрытие пока недоступно:
-report отмечает retainedBeforeAdoption/preAdoptLossUnresolved. Disable-return и EOF
-не отменяют pending native/AX команды и не снимают Down/Up debt. Ожидания start/stop
-ограничены 500/250 мс; это не отмена зависшего native tapCreate. Cleanup сообщается
-только после фактической очистки. Двухпроцессный capture/handover и EOF после adopt
-проверены отдельно выше. Потеря защиты до adopt и полная системная матрица
-остаются обязательными.
+Disable-return и EOF не отменяют pending native/AX команды и не снимают Down/Up debt.
+Storage-only снимает ограничение раскрытия уже принятой очереди после локального
+quiescence; при незавершённых callbacks она остаётся у прежнего владельца.
+Ожидания start/stop ограничены 500/250 мс; это не отмена зависшего native tapCreate.
+Проверен controlled stop собственного driver, а не отзыв TCC/Secure Input во время
+настоящей пользовательской конвертации. Дальнейший физический ввод при потере
+контроля не объявляется защищённым. Runtime wiring, обычный replay permit,
+graceful quit и полная матрица modifiers/shortcuts/mouse остаются открытыми.
 
 ## CI текущего контура
 
@@ -133,3 +187,9 @@ report отмечает retainedBeforeAdoption/preAdoptLossUnresolved. Disable-r
 761 тест без failures/skipped и strict SwiftLint — 0 нарушений в 248 файлах.
 Лог: `.build/checkpoint-eaab146-ci.log`. Требование CI для этого среза выполнено;
 локальные 3 skip и блокировка живой приёмки этим удалённым прогоном не закрываются.
+
+Следующий коммит `455dcb9c8e7a8eb63c80307627135051bdde77ac` также прошёл
+[CI](https://github.com/cramen/LSwitch/actions/runs/38877272494): build, 776 тестов
+без failures/skipped, strict SwiftLint — 0 нарушений в 252 файлах.
+Лог `.build/checkpoint-455dcb9-ci.log`. Он включает исправление per-PID capture
+и протокол живого v4; задача 4.2 и runtime wiring по-прежнему не закрыты.

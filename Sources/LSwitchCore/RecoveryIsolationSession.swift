@@ -23,6 +23,8 @@ public final class RecoveryIsolationSession {
     private var selectionUnknown = false
     private var detached = false
     private var adopted = false
+    private var storageOnlyAdopted = false
+    private var retirementPending = false
     private var reveals = 0
     private var preparationStarted = false
 
@@ -109,7 +111,10 @@ public final class RecoveryIsolationSession {
     }
 
     /// Чистая точка подключения используется компонентными тестами без создания системного tap.
-    func prepareCapture(router: RecoveryCaptureRouter, protection: any RecoveryIsolationProtecting) -> Bool {
+    func prepareCapture(
+        router: RecoveryCaptureRouter, protection: any RecoveryIsolationProtecting,
+        observePhase: @escaping @Sendable (RecoveryCapturePhase) -> Void = { _ in }
+    ) -> Bool {
         guard !Task.isCancelled, !preparationStarted, router.bypassRawProcessing,
               protection.bridge === bridge else { return false }
         preparationStarted = true
@@ -132,7 +137,7 @@ public final class RecoveryIsolationSession {
         self.operation = operation
         let attachment = RecoveryCaptureAttachment(port: operation.capturePort, filter: filter,
                                                    ownMarker: { [bridge] in bridge.owns(senderPID: $0, marker: $1) },
-                                                   clock: clock)
+                                                   clock: clock, observePhase: observePhase)
         self.attachment = attachment
         guard !Task.isCancelled, targetIsCurrent, router.attach(attachment) else {
             markPeerUnavailable()
@@ -186,6 +191,31 @@ public final class RecoveryIsolationSession {
         coordinator.permissionsLost()
     }
 
+    /// Retryable storage-only переход. Потеря защиты не отменяет pending отправки и не разрешает replay.
+    @discardableResult
+    public func finishForStorageRecovery() -> Bool {
+        if adopted { return storageOnlyAdopted }
+        guard let operation, let attachment, let router else { return false }
+        retirementPending = true
+        protectionSlot.invalidate()
+        bridge.markLost()
+        guard operation.closeCaptureForStorage(router: router, attachment: attachment) else { return false }
+        detached = true
+        retirementPending = false
+        coordinator.permissionsLost()
+        _ = bridge.drainObservations()
+        if selectionToken != nil, !selectionUnknown { markFixtureSelectionUnknown(commandReturned: false) }
+        if ledger.decision == nil {
+            _ = ledger.finishUsingRecordedCleanup(
+                operation: ledger.operation, text: .unknown, ordinaryRouteValid: false
+            )
+        }
+        guard case .adopted = operation.adopt(in: coordinator, reason: .cleanupUnconfirmed) else { return false }
+        adopted = true
+        storageOnlyAdopted = true
+        return true
+    }
+
     public func show() { coordinator.show() }
 
     public var metadata: RecoveryWindowMetadata? {
@@ -225,6 +255,7 @@ public final class RecoveryIsolationSession {
             selectionCommandRegistered: selectionToken != nil, selectionUnknown: selectionUnknown, adopted: adopted,
             retainedBeforeAdoption: operation != nil && !adopted,
             preAdoptLossUnresolved: operation != nil && !adopted && !protectionSlot.isProtectionAvailable,
+            storageOnlyAdopted: storageOnlyAdopted, retirementPending: retirementPending,
             eventsRemaining: stored?.eventCount ?? counts?.capturedEvents ?? 0,
             utf16BytesRemaining: stored?.utf16Bytes ?? counts?.capturedUTF16Bytes ?? 0,
             ledgerSubmissionCount: ledger.submissionCount, ledgerHasUnknown: ledger.hasUnknownSubmissions,

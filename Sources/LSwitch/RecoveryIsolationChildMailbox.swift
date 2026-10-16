@@ -9,6 +9,8 @@ struct IsolationChildMessage: Sendable {
     let windowTitle: String?
     let fixtureTextUnchanged: Bool?
     let fixtureSelectionUnchanged: Bool?
+    let controlTextMatches: Bool
+    let controlSelectionMatches: Bool
     let received: [String]
     let changeCount: Int?
     let foreignInput: Bool
@@ -36,6 +38,8 @@ private struct IsolationChildWireReply: Decodable {
     let windowTitle: String?
     let fixtureTextUnchanged: Bool
     let fixtureSelectionUnchanged: Bool
+    let controlTextMatches: Bool
+    let controlSelectionMatches: Bool
     let received: [String]
     let changeCount: Int
     let foreignInput: Bool
@@ -47,6 +51,7 @@ private struct IsolationChildWireReply: Decodable {
     enum CodingKeys: String, CodingKey {
         case version = "v"
         case nonce, sequence, kind, pid, senderPID, windowTitle, fixtureTextUnchanged, fixtureSelectionUnchanged
+        case controlTextMatches, controlSelectionMatches
         case received, changeCount, foreignInput, overflow, active, focused, reason
     }
 }
@@ -138,6 +143,7 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
             sequence: reply.sequence, kind: reply.kind, processID: target, windowTitle: reply.windowTitle,
             fixtureTextUnchanged: reply.fixtureTextUnchanged,
             fixtureSelectionUnchanged: reply.fixtureSelectionUnchanged,
+            controlTextMatches: reply.controlTextMatches, controlSelectionMatches: reply.controlSelectionMatches,
             received: reply.received, changeCount: reply.changeCount, foreignInput: reply.foreignInput,
             overflow: reply.overflow, active: reply.active, focused: reply.focused, reason: reply.reason
         )

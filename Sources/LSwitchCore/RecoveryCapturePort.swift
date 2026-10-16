@@ -89,6 +89,32 @@ final class RecoveryCapturePort: @unchecked Sendable {
         return batch == nil ? .awaitingProtection(seal.counts) : .detached(seal.counts)
     }
 
+    /// Не ждёт callback, удерживающий port. Pending сохраняет прежнего владельца и не открывает маршрут.
+    func trySealForStorage(scope expected: RecoveryCaptureScope) -> RecoveryAdmissionSeal? {
+        guard lock.try() else { return nil }
+        defer { lock.unlock() }
+        guard expected == scope, transferred == nil else { return nil }
+        stopLocked(.interceptionStopped)
+        if seal == nil { seal = admission.seal(binding: scope.binding) }
+        return seal
+    }
+
+    func ownsStorageSeal(_ expected: RecoveryAdmissionSeal) -> Bool {
+        guard lock.try() else { return false }
+        defer { lock.unlock() }
+        return stopped != nil && transferred == nil && seal === expected
+    }
+
+    /// Только локальное RAM-владение. Gate, post и ledger здесь вообще не вызываются.
+    func detachForStorage(proof: RecoveryRetiredCaptureProof) -> Bool {
+        guard lock.try() else { return false }
+        defer { lock.unlock() }
+        guard stopped != nil, transferred == nil, let seal,
+              proof.consume(scope: scope, seal: seal) else { return false }
+        if batch == nil { batch = buffer.detach(token: scope.binding.hold) }
+        return batch != nil
+    }
+
     /// Конкретный RAM coordinator вызывается без gate lock. Отклонение не изымает private batch.
     @MainActor
     func adopt(

@@ -12,8 +12,13 @@ enum RecoveryIsolationProbe {
         guard options.count <= 1,
               let transport = IsolationCaptureTransport(rawValue: options.first?.split(separator: "=").last
                 .map(String.init) ?? "session") else { return 2 }
+        let faults = arguments.filter { $0.hasPrefix("--recovery-isolation-fault=") }
+        guard faults.count <= 1,
+              let fault = IsolationProbeFault(rawValue: faults.first?.split(separator: "=").last
+                .map(String.init) ?? "none"), fault == .none || transport == .recipient else { return 2 }
         let controller = RecoveryIsolationProbeController()
         controller.captureTransport = transport
+        controller.fault = fault
         return controller.run()
         #else
         return 2
@@ -23,10 +28,16 @@ enum RecoveryIsolationProbe {
 
 #if DEBUG
 enum IsolationCaptureTransport: String { case session, recipient }
+enum IsolationProbeFault: String {
+    case none
+    case beforeSelection = "stop-before-selection"
+    case beforeAdoption = "stop-before-adopt"
+}
 
 enum IsolationProbeStage: String {
     case ready, configuring, focusing, startingDriver, selecting, capturing
     case prefixSnapshot, retiredPrefixSnapshot, challengeSnapshot, interactive, captureFailureSnapshot, closing
+    case stoppingCapture, retiringCapture, storageSnapshot
 }
 
 @MainActor
@@ -39,6 +50,11 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var driver: RecipientTapDriver?
     var captureTap: EventTapCore?
     var captureTransport = IsolationCaptureTransport.session
+    var fault = IsolationProbeFault.none
+    var expectedStopCompleted = false
+    var preMutationRefusalObserved = false
+    var storageRecoveryObserved = false
+    var retirementStartedAt: UInt64?
     var timer: Timer?
     var stage = IsolationProbeStage.ready
     var stageBeforeCleanup: IsolationProbeStage?
@@ -83,8 +99,8 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         application.mainMenu = previousMenu
         _ = application.setActivationPolicy(previousPolicy)
         printReport(event: "final")
-        return cleanupCompleted && prefixUnchanged && challengeBlocked && !childAbortObserved && !protectionLossObserved
-            && childExitStatus == 0 && status == "operator_finished" ? 0 : 1
+        return cleanupCompleted && !childAbortObserved && !protectionLossObserved
+            && childExitStatus == 0 && scenarioCompleted ? 0 : 1
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -114,6 +130,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         if stage == .challengeSnapshot, now >= nextFocusRequestAt { requestChallengeSnapshot(now: now) }
         if stage == .retiredPrefixSnapshot, now >= nextFocusRequestAt { requestRetiredPrefixSnapshot(now: now) }
         if stage == .interactive { observeInteractiveProtection() }
+        if stage == .retiringCapture { observeStorageRetirement(now: now) }
     }
 
     private func consumeMailbox() -> Bool {
@@ -141,7 +158,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     }
 
     private func observeInteractiveProtection() {
-        guard !peerLossObserved, !peerQuitRequested, !protectionLossObserved,
+        guard fault != .beforeAdoption, !peerLossObserved, !peerQuitRequested, !protectionLossObserved,
               driver?.isProtectionAvailable != true || session?.targetIsCurrent != true else { return }
         protectionLossObserved = true
         session?.markPeerUnavailable()

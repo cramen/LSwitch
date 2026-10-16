@@ -53,6 +53,16 @@ final class RecoveryIsolationReceiverView: NSTextView {
         return selectedRange() == NSRange(location: 0, length: fixture.utf16.count)
     }
 
+    var controlTextMatches: Bool {
+        guard !foreignInput, !overflow else { return false }
+        return string.utf16.elementsEqual("kept".utf16)
+    }
+
+    var controlSelectionMatches: Bool {
+        guard !foreignInput, !overflow else { return false }
+        return selectedRange() == NSRange(location: 4, length: 0)
+    }
+
     /// Local monitor не читает characters/Unicode. PID и marker — граница опыта, не аутентификация.
     func permitsLocalEvent(_ event: NSEvent) -> Bool {
         guard identify(event) != nil else {

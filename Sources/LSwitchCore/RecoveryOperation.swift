@@ -7,6 +7,7 @@ final class RecoveryOperation {
     let ledger: ConversionSafetyLedger
     let capturePort: RecoveryCapturePort
     private var recoveryClaim: ConversionSafetyInputClaim?
+    private var storageDetached = false
 
     private init(ledger: ConversionSafetyLedger, capturePort: RecoveryCapturePort) {
         self.ledger = ledger
@@ -30,6 +31,22 @@ final class RecoveryOperation {
     }
 
     func closeCapture() -> RecoveryCaptureClosure { capturePort.close(scope: capturePort.scope) }
+
+    /// Повторяется только проверка локального quiescence; новых мутаций или системных допусков здесь нет.
+    func closeCaptureForStorage(router: RecoveryCaptureRouter, attachment: RecoveryCaptureAttachment) -> Bool {
+        guard router.identifier == capturePort.scope.tapIdentifier, attachment.port === capturePort else {
+            return false
+        }
+        if storageDetached { return true }
+        guard router.beginRetirement(attachment),
+              let seal = capturePort.trySealForStorage(scope: capturePort.scope),
+              let proof = router.retiredProof(seal: seal), capturePort.detachForStorage(proof: proof) else {
+            return false
+        }
+        storageDetached = true
+        _ = router.detach(attachment)
+        return true
+    }
 
     /// Finish остаётся явным решением владельца. Повторный rejected adopt использует тот же единственный claim.
     func adopt(in coordinator: RecoveryCoordinator, reason: RecoveryReason) -> RecoveryOperationAdoption {
