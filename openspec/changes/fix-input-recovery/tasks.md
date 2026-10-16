@@ -112,6 +112,11 @@ Stop после capture и до adopt сохранил 2 события/16 ба�
 Обычный режим перепроверен на том же v7. Этот компонентный и диагностический путь
 не закрывает production 3.1/3.2/4.2/6.2: runtime, реальный TCC/Secure Input,
 graceful quit и полная событийная матрица остаются открытыми.
+
+Срез `ed2c2c8` прошёл CI: build, 789 тестов без failures/skipped, strict SwiftLint
+0/258 файлов; `openspec validate --all --strict` — 6/6. Замечание complexity=11
+в baseline исправлено выделением метода, повторный живой control v8 успешен.
+Полные SHA и протоколы — `docs/acceptance-2026-10-16.md`.
 Подробности и точные бинарники — `docs/acceptance-2026-10-16.md`.
 
 DEBUG bridge с тем же Core registry добавил 5 модельных проверок callback-протокола;

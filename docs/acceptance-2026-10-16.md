@@ -206,3 +206,10 @@ baseline, Core storage/proof и fault-пути v7 остались теми же
 final reply/EOF/child exit 0/cleanup=true, stderr=0. Локаторы
 `.build/recovery-isolation-v8-control.{jsonl,stderr}`,
 `.build/recovery-isolation-v8-manifest.json`.
+
+Финальный исходный срез `ed2c2c8415cb377db60373cd5266aa86292ac2a8` прошёл
+[CI](https://github.com/cramen/LSwitch/actions/runs/38880149520): build, **789 тестов
+без failures/skipped**, strict SwiftLint — 0 нарушений в 258 файлах.
+Лог `.build/checkpoint-ed2c2c8-ci.log`. OpenSpec strict validation — 6/6.
+Change сохраняет статус 3/14: это подтверждённые компоненты и диагностические
+сценарии; перечисленные выше задачи подключения и системного допуска не архивируются.
