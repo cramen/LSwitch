@@ -193,3 +193,16 @@ graceful quit и полная матрица modifiers/shortcuts/mouse оста�
 без failures/skipped, strict SwiftLint — 0 нарушений в 252 файлах.
 Лог `.build/checkpoint-455dcb9-ci.log`. Он включает исправление per-PID capture
 и протокол живого v4; задача 4.2 и runtime wiring по-прежнему не закрыты.
+
+CI среза `3f62335aca26fca70cfd1be7e0e7f4a42d52eec6` выявил единственное замечание
+strict lint: complexity=11 в контрольном tick. Чтение mailbox выделено в отдельный
+метод; повторные локальные build/test — 789 без failures/skipped,
+логи `.build/recovery-storage-lint-{build,test}.log`. Изменился только App-обработчик
+baseline, Core storage/proof и fault-пути v7 остались теми же.
+
+Повторный receiver control на SHA
+`8ece2b3158f304c00cff361478b978f05ab2bf401e08661ad4d7d19542f55151`
+прошёл за 508 мс: exact text/caret=true, changes=1, обе клавиши получены,
+final reply/EOF/child exit 0/cleanup=true, stderr=0. Локаторы
+`.build/recovery-isolation-v8-control.{jsonl,stderr}`,
+`.build/recovery-isolation-v8-manifest.json`.

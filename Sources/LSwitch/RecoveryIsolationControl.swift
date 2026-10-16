@@ -86,17 +86,7 @@ private final class RecoveryIsolationControlController: NSObject, NSApplicationD
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     @objc private func tick() {
-        guard !finished else { return }
-        if let mailbox = peer.take() {
-            childStderrBytes = mailbox.stderrBytes
-            childExitStatus = mailbox.exitStatus ?? childExitStatus
-            if let failure = mailbox.failure { return finish(failure) }
-            for message in mailbox.messages {
-                handle(message)
-                if finished { return }
-            }
-            if mailbox.eof { return finish("unexpected_child_eof") }
-        }
+        guard !finished, consumeMailbox() else { return }
         guard peer.isRunning, identityAnchor?.targetIsCurrent == true else { return finish("child_identity_lost") }
         let now = DispatchTime.now().uptimeNanoseconds
         guard now - started < 10_000_000_000 else { return finish("control_timeout") }
@@ -107,6 +97,19 @@ private final class RecoveryIsolationControlController: NSObject, NSApplicationD
             pendingSnapshot = true
             nextSnapshotAt = now + 50_000_000
         }
+    }
+
+    private func consumeMailbox() -> Bool {
+        guard let mailbox = peer.take() else { return true }
+        childStderrBytes = mailbox.stderrBytes
+        childExitStatus = mailbox.exitStatus ?? childExitStatus
+        if let failure = mailbox.failure { finish(failure); return false }
+        for message in mailbox.messages {
+            handle(message)
+            if finished { return false }
+        }
+        if mailbox.eof { finish("unexpected_child_eof"); return false }
+        return true
     }
 
     private func handle(_ message: IsolationChildMessage) {
