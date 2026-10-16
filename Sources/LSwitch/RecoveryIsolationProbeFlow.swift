@@ -7,6 +7,7 @@ import LSwitchCore
 extension RecoveryIsolationProbeController {
     func handle(_ message: IsolationChildMessage) {
         lastReply = message
+        if pendingFinishReason != nil, message.kind != "exiting" { return }
         if message.kind == "exiting" {
             guard controlledExit(message) else {
                 childAbortObserved = true

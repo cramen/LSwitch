@@ -20,6 +20,11 @@ public final class RecoveryWindowSession {
         let request: RecoveryWindowDeletionRequest
     }
 
+    private struct PendingQuit {
+        let intent: RecoveryWindowQuitIntent
+        let request: RecoveryQuitConfirmation
+    }
+
     private let identifier = UUID()
     private var record: Record?
     private var revision = UUID()
@@ -30,6 +35,9 @@ public final class RecoveryWindowSession {
     private var pendingDeletion: PendingDeletion?
     private var isRequestingDeletion = false
     private var isResolvingDeletion = false
+    private var pendingQuit: PendingQuit?
+    private var isRequestingQuit = false
+    private var isResolvingQuit = false
 
     public init() {}
 
@@ -63,6 +71,7 @@ public final class RecoveryWindowSession {
         isVisible = true
         notice = record?.isDeleted == true ? .deleted : nil
         cancelPendingDeletion()
+        cancelPendingQuit()
         return isVisible && record?.metadata.recordIdentifier == metadata.recordIdentifier
     }
 
@@ -71,6 +80,7 @@ public final class RecoveryWindowSession {
         isVisible = false
         invalidateDisclosure()
         cancelPendingDeletion()
+        cancelPendingQuit()
         if let previous { previous.actions.didHide(previous.metadata.recordIdentifier) }
     }
 
@@ -78,7 +88,7 @@ public final class RecoveryWindowSession {
     @discardableResult
     public func reveal() -> Bool {
         guard isVisible, let record, !record.isDeleted, pendingDeletion == nil,
-              !isRequestingDeletion, !isResolvingDeletion else { return false }
+              !isRequestingDeletion, !isResolvingDeletion, !quitIsBusy else { return false }
         invalidateDisclosure()
         let expected = revision
         let result = record.actions.reveal(record.metadata.recordIdentifier)
@@ -95,7 +105,7 @@ public final class RecoveryWindowSession {
     /// Копия создаётся лишь отдельным действием для конкретного Unicode-фрагмента.
     public func editFragment(ordinal: Int) -> RecoveryWindowDraft? {
         guard let record, let fragment = visibleFragment(ordinal: ordinal), pendingDeletion == nil,
-              !isRequestingDeletion, !isResolvingDeletion else { return nil }
+              !isRequestingDeletion, !isResolvingDeletion, !quitIsBusy else { return nil }
         if record.drafts[ordinal] == nil { record.drafts[ordinal] = fragment.text }
         let token = RecoveryWindowEditorToken(
             session: identifier, record: record.metadata.recordIdentifier, revision: revision, ordinal: ordinal
@@ -108,14 +118,14 @@ public final class RecoveryWindowSession {
     public func saveDraft(_ text: String, token: RecoveryWindowEditorToken) -> Bool {
         guard token == activeEditor, token.session == identifier, token.revision == revision,
               let record, token.record == record.metadata.recordIdentifier,
-              !isResolvingDeletion, visibleFragment(ordinal: token.ordinal) != nil else { return false }
+              !isResolvingDeletion, !quitIsBusy, visibleFragment(ordinal: token.ordinal) != nil else { return false }
         record.drafts[token.ordinal] = text
         return true
     }
 
     public func requestDeletion() -> RecoveryWindowDeletionIntent? {
         guard isVisible, let record, !record.isDeleted, pendingDeletion == nil,
-              !isRequestingDeletion, !isResolvingDeletion else { return nil }
+              !isRequestingDeletion, !isResolvingDeletion, !quitIsBusy else { return nil }
         isRequestingDeletion = true
         defer { isRequestingDeletion = false }
         let expected = revision
@@ -175,6 +185,71 @@ public final class RecoveryWindowSession {
     private func cancelPendingDeletion() {
         let pending = pendingDeletion
         pendingDeletion = nil
+        pending?.request.cancel()
+    }
+}
+
+extension RecoveryWindowSession {
+    /// Quit допускается и из скрытого окна. Он не раскрывает payload и не уничтожает черновики при отмене.
+    public func requestQuit(actions: RecoveryQuitActions) -> RecoveryWindowQuitRequest {
+        if let pendingQuit { return .confirmationRequired(pendingQuit.intent) }
+        guard !isRequestingQuit, !isResolvingQuit, !isRequestingDeletion, !isResolvingDeletion else {
+            return .handoverRequired
+        }
+        isRequestingQuit = true
+        defer { isRequestingQuit = false }
+        cancelPendingDeletion()
+        invalidateDisclosure()
+        let expected = revision
+        let current = record
+        let request = actions.request()
+        guard revision == expected, record === current else {
+            if case .confirmationRequired(let confirmation) = request { confirmation.cancel() }
+            return .handoverRequired
+        }
+        switch request {
+        case .allowed:
+            return record == nil || record?.isDeleted == true ? .allowed : .handoverRequired
+        case .handoverRequired:
+            return .handoverRequired
+        case .confirmationRequired(let confirmation):
+            guard let record, confirmation.recordIdentifier == record.metadata.recordIdentifier else {
+                confirmation.cancel()
+                return .handoverRequired
+            }
+            let intent = RecoveryWindowQuitIntent(session: identifier, record: confirmation.recordIdentifier)
+            pendingQuit = .init(intent: intent, request: confirmation)
+            return .confirmationRequired(intent)
+        }
+    }
+
+    @discardableResult
+    public func resolveQuit(_ intent: RecoveryWindowQuitIntent, confirm: Bool) -> RecoveryWindowQuitResolution {
+        guard let pending = pendingQuit, pending.intent == intent, let record,
+              record.metadata.recordIdentifier == intent.record, !isResolvingQuit else { return .stale }
+        pendingQuit = nil
+        isResolvingQuit = true
+        defer { isResolvingQuit = false }
+        guard confirm else { pending.request.cancel(); return .cancelled }
+        guard pending.request.confirm() else {
+            if self.record === record { notice = .deletionRefused }
+            return .refused
+        }
+        // Только подтверждённая запись: reentrant show не даёт удалить черновики другой записи.
+        record.drafts.removeAll()
+        record.isDeleted = true
+        if self.record === record {
+            invalidateDisclosure()
+            notice = .deleted
+        }
+        return .quitAllowed
+    }
+
+    private var quitIsBusy: Bool { pendingQuit != nil || isRequestingQuit || isResolvingQuit }
+
+    private func cancelPendingQuit() {
+        let pending = pendingQuit
+        pendingQuit = nil
         pending?.request.cancel()
     }
 }

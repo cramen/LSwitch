@@ -45,8 +45,10 @@ private final class RecoveryWindowPreviewDelegate: NSObject, NSApplicationDelega
         let timer = Timer(timeInterval: 120, target: self, selector: #selector(timeout), userInfo: nil, repeats: false)
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)
-        application.run()
-        if !finished { finish("event_loop_stopped") }
+        repeat {
+            application.run()
+            if !finished { requestExit("event_loop_stopped") }
+        } while !finished
         application.delegate = previousDelegate
         application.mainMenu = previousMenu
         _ = application.setActivationPolicy(previousPolicy)
@@ -55,6 +57,7 @@ private final class RecoveryWindowPreviewDelegate: NSObject, NSApplicationDelega
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        guard !finished, fixture == nil else { return }
         guard let fixture = RecoveryWindowPreviewFixture.make() else { return finish("setup_failed") }
         self.fixture = fixture
         let before = Set(NSApplication.shared.windows.map { ObjectIdentifier($0) })
@@ -62,7 +65,11 @@ private final class RecoveryWindowPreviewDelegate: NSObject, NSApplicationDelega
         self.controller = controller
         controller.prepare()
         ownedWindows = NSApplication.shared.windows.filter { !before.contains(ObjectIdentifier($0)) }
-        guard ownedWindows.count == 1 else { return finish("setup_failed") }
+        guard ownedWindows.count == 1 else {
+            showPreview()
+            requestExit("setup_failed")
+            return
+        }
         status = "preview_ready"
         showPreview()
     }
@@ -75,7 +82,7 @@ private final class RecoveryWindowPreviewDelegate: NSObject, NSApplicationDelega
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        finish("quit")
+        requestExit("quit")
         return .terminateCancel
     }
 
@@ -87,10 +94,26 @@ private final class RecoveryWindowPreviewDelegate: NSObject, NSApplicationDelega
         controller.show(metadata, actions: fixture.actions)
     }
 
-    @objc private func timeout() { finish("timeout") }
+    @objc private func timeout() {
+        // Deadline завершает автоматическое ожидание, но не уничтожает pending RAM без решения.
+        requestExit("timeout_confirmed")
+    }
+
+    private func requestExit(_ result: String) {
+        guard !finished else { return }
+        guard let fixture else { finish(result); return }
+        guard let controller, fixture.metadata != nil else {
+            status = "recovery_presentation_unavailable"
+            return
+        }
+        controller.requestQuit(actions: fixture.quitActions) { [weak self] allowed in
+            if allowed { self?.finish(result) }
+        }
+    }
 
     private func finish(_ result: String) {
         guard !finished else { return }
+        if let fixture, !fixture.report.payloadDeleted { requestExit(result); return }
         finished = true
         status = result
         timer?.invalidate()

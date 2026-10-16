@@ -218,6 +218,8 @@ public final class RecoveryIsolationSession {
 
     public func show() { coordinator.show() }
 
+    public var quitActions: RecoveryQuitActions { coordinator.quitActions }
+
     public var metadata: RecoveryWindowMetadata? {
         guard let stored = coordinator.metadata else { return nil }
         return .init(recordIdentifier: stored.identifier, applicationName: "Тестовый дочерний редактор",

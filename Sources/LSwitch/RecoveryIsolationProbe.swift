@@ -70,6 +70,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var status = "starting"
     var finished = false
     var cleanupCompleted = false
+    var shutdownAttemptFinished = false
     var childStderrBytes = 0
     var childExitStatus: Int32?
     var peerLossObserved = false
@@ -84,6 +85,11 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var postedChallengeCount = 0
     var driverBeforeCleanup: RecipientTapDriverSnapshot?
     var sessionBeforeCleanup: RecoveryIsolationReport?
+    var pendingFinishReason: String?
+    var quitPromptInFlight = false
+    var quitDeclined = false
+    var quitAuthorized = false
+    var recoveryPresented = false
 
     func run() -> Int32 {
         let application = NSApplication.shared
@@ -94,7 +100,10 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         application.delegate = self
         application.mainMenu = makeMenu()
         _ = application.setActivationPolicy(.accessory)
-        application.run()
+        repeat {
+            application.run()
+            if !finished { finish("event_loop_stopped") }
+        } while !shutdownAttemptFinished
         application.delegate = previousDelegate
         application.mainMenu = previousMenu
         _ = application.setActivationPolicy(previousPolicy)
@@ -121,7 +130,19 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     @objc func tick() {
-        guard !finished, consumeMailbox() else { return }
+        guard !finished else { return }
+        let mailboxReady = consumeMailbox()
+        guard !finished else { return }
+        if pendingFinishReason != nil {
+            if stage == .interactive { observeInteractiveProtection() }
+            processPendingQuit()
+            return
+        }
+        guard mailboxReady else { return }
+        advanceProbe()
+    }
+
+    private func advanceProbe() {
         let now = DispatchTime.now().uptimeNanoseconds
         if now - started > 120_000_000_000 { return finish("fixture_timeout") }
         if stage != .interactive, now - started > 10_000_000_000 { return finish("setup_timeout") }
@@ -175,9 +196,10 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         guard let session, let metadata = session.metadata else { return }
         session.show()
         recoveryWindow.show(metadata, actions: session.actions)
+        recoveryPresented = true
     }
 
-    func finish(_ result: String) {
+    func shutdown(_ result: String) {
         guard !finished else { return }
         finished = true
         status = result
@@ -201,6 +223,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
             consumeFinalMailbox()
             cleanupCompleted = stopped && !peer.isRunning
             if !cleanupCompleted { status = "cleanup_unconfirmed" }
+            shutdownAttemptFinished = true
             let application = NSApplication.shared
             application.stop(nil)
             if let wake = NSEvent.otherEvent(
@@ -232,6 +255,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         menu.addItem(item)
         addCommand("Показать восстановление", action: #selector(showRecovery), key: "r", to: submenu)
         addCommand("Закрыть тестовый приёмник", action: #selector(closeReceiver), key: "e", to: submenu)
+        addCommand("Проверить аварийное завершение", action: #selector(requestFixtureAbort), key: "t", to: submenu)
         submenu.addItem(withTitle: "Завершить проверку",
                         action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let edit = NSMenuItem(title: "Правка", action: nil, keyEquivalent: "")

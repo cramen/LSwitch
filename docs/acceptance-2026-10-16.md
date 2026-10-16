@@ -1,6 +1,6 @@
 # Проверка восстановления ввода — 2026-10-16
 
-Продолжение `fix-input-recovery`, D7.3. Выполнено 3/14 задач; change не готов
+Продолжение `fix-input-recovery`, D7.3–D7.4 и D5.1. Выполнено 4/14 задач; change не готов
 к архивированию. Production factory, обычный replay permit и runtime wiring
 нового recovery-владельца остаются недоступными.
 
@@ -211,5 +211,45 @@ final reply/EOF/child exit 0/cleanup=true, stderr=0. Локаторы
 [CI](https://github.com/cramen/LSwitch/actions/runs/38880149520): build, **789 тестов
 без failures/skipped**, strict SwiftLint — 0 нарушений в 258 файлах.
 Лог `.build/checkpoint-ed2c2c8-ci.log`. OpenSpec strict validation — 6/6.
-Change сохраняет статус 3/14: это подтверждённые компоненты и диагностические
+На этом исходном срезе change имел статус 3/14: это подтверждённые компоненты и диагностические
 сценарии; перечисленные выше задачи подключения и системного допуска не архивируются.
+
+## 5.1: подтверждение выхода и сохранение черновиков
+
+Единый typed quit intent связывает Coordinator и UI: Cancel/скрытие не удаляют
+оригинал или черновик, Confirm действует один раз. Pending handover запрещает выход.
+Timeout/abort диагностики больше не удаляют очередь молча; повторный event loop
+сохраняет владельца до решения, асинхронная очистка завершается до выхода из run.
+Review исправил повторный вход из deletion.cancel до установки latch и прежний
+безусловный finish после unexpected run-loop return. Добавлены 13 проверок quit;
+полный изолированный UI-срез — **802 теста без failures/skipped**, review CLEAN.
+Логи `.build/recovery-quit-final-{build,test}.log`, `.build/recovery-quit-v4-test.log`.
+
+Первый UI-опыт `.build/recovery-quit-v3-normal.jsonl` не принят целиком:
+текст CUA typeText не был подтверждён перед quit, затем внешний harness достиг
+145 секунд. На 120 сек child завершился, а родитель сохранил 2 события/16 байт;
+последующее принудительное завершение harness не является graceful-quit PASS.
+
+Повтор на SHA `efb18ce54f8c2fa4deddc9d4e2736876ba70de42d70d8ec8f5114d55f8dbcdcd`
+прошёл с точной проверкой текста до quit: собственная копия изменена через CUA setValue,
+затем Cancel, повторное раскрытие/редактирование подтвердили тот же черновик и
+неизменный оригинальный фрагмент. Hidden→quit→Cancel→Cmd+R также сохранил данные.
+При скрытом окне read инструмента получил timeout; известная команда меню Cmd+Q
+открыла подтверждение. Это не потеря процесса/данных. Child закрыт заранее через
+Cmd+E; запись сохранялась 257587 мс. Confirm дал quitAuthorized=true,
+events/bytes=0, payloadDeleted=true, child exit 0, cleanup=true, stderr=0.
+Clipboard не использовался. Локаторы `.build/recovery-quit-v3-confirm.{jsonl,stderr}`,
+`.build/recovery-quit-v3-ui.json`, `.build/recovery-quit-v3-manifest.json`.
+
+На SHA `e35c4707f6935a83c3657c084f0b2fb121f982cf7cef19e6c44366a09830a40b`
+Cmd+T вызвал controlled abort, который предложил подтверждение. Cancel сохранил
+2 события/16 байт и доступный точный исходный фрагмент. Последующий явный quit/Confirm
+удалил запись: quitAuthorized=true, payloadDeleted=true, events/bytes=0,
+child exit 0, cleanup=true, stderr=0; финал 47179 мс. Причина diagnostic_abort
+сохранена, такой процесс намеренно не объявляется обычным successful probe.
+Локаторы `.build/recovery-quit-v4-abort.{jsonl,stderr}`,
+`.build/recovery-quit-v4-abort-ui.json`, `.build/recovery-quit-v4-manifest.json`.
+
+С учётом прежней приёмки раскрытия/ручного копирования/удаления 5.1 закрыта отдельно.
+Ни 3.2, ни production gate, ни весь change этим не завершаются. Обычный LSwitch
+восстановлен, PuntoSwitcher/Caramba не запускались.

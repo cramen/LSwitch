@@ -81,6 +81,8 @@ public final class RecoveryWindowPreviewFixture {
         coordinator.show()
     }
 
+    public var quitActions: RecoveryQuitActions { coordinator.quitActions }
+
     public var report: RecoveryWindowPreviewReport {
         let stored = coordinator.metadata
         return .init(

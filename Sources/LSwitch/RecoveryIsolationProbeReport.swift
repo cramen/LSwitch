@@ -21,6 +21,8 @@ extension RecoveryIsolationProbeController {
             "challengeBlocked": challengeBlocked, "observationComplete": observationsComplete,
             "peerLossObserved": peerLossObserved, "childAbortObserved": childAbortObserved,
             "protectionLossObserved": protectionLossObserved,
+            "quitAuthorized": quitAuthorized, "quitDeclined": quitDeclined,
+            "pendingFinishReason": pendingFinishReason ?? "none",
             "childStderrBytes": childStderrBytes,
             "childExitStatus": childExitStatus.map { $0 as Any } ?? NSNull(),
             "cleanupCompleted": cleanupCompleted, "payloadLogged": false, "automaticClipboardAccess": false,
