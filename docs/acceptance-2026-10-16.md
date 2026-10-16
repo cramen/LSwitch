@@ -80,5 +80,13 @@ Read-only системные флаги подтвердили `CGSSessionScreen
 report отмечает retainedBeforeAdoption/preAdoptLossUnresolved. Disable-return и EOF
 не отменяют pending native/AX команды и не снимают Down/Up debt. Ожидания start/stop
 ограничены 500/250 мс; это не отмена зависшего native tapCreate. Cleanup сообщается
-только после фактической очистки. Новая реализация ещё требует собственного CI
-и системной проверки в разблокированной сессии.
+только после фактической очистки. Системная проверка в разблокированной сессии
+остаётся обязательной.
+
+## CI текущего контура
+
+Коммит `eaab146ba9297adc4d74aac62efd0ed3510d0109` прошёл
+[CI](https://github.com/cramen/LSwitch/actions/runs/38854830163): build,
+761 тест без failures/skipped и strict SwiftLint — 0 нарушений в 248 файлах.
+Лог: `.build/checkpoint-eaab146-ci.log`. Требование CI для этого среза выполнено;
+локальные 3 skip и блокировка живой приёмки этим удалённым прогоном не закрываются.
