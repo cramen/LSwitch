@@ -11,9 +11,6 @@ extension EventTapCore {
 
     @MainActor
     func scheduleRecoveryCaptureExpiry(_ attachment: RecoveryCaptureAttachment) {
-        let expiryQueue = DispatchQueue.global(qos: .userInitiated)
-        expiryQueue.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak attachment] in
-            attachment?.expire()
-        }
+        attachment.scheduleExpiry()
     }
 }

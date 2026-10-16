@@ -4,7 +4,7 @@ import Foundation
 
 enum RecoveryCaptureRoute: Equatable { case legacy, passThrough, suppress }
 
-struct RecoveryFixtureCaptureFilter: Sendable {
+struct RecoveryFixtureCaptureFilter: Equatable, Sendable {
     let senderProcessID: Int32
     let downMarker: Int64
     let releaseMarker: Int64
@@ -12,6 +12,10 @@ struct RecoveryFixtureCaptureFilter: Sendable {
     func matches(type: CGEventType, sender: Int64, marker: Int64) -> Bool {
         guard sender == Int64(senderProcessID) else { return false }
         return (type == .keyDown && marker == downMarker) || (type == .keyUp && marker == releaseMarker)
+    }
+
+    func ownsHeader(sender: Int64, marker: Int64) -> Bool {
+        sender == Int64(senderProcessID) && (marker == downMarker || marker == releaseMarker)
     }
 }
 
@@ -72,6 +76,11 @@ final class RecoveryCaptureAttachment: @unchecked Sendable {
     func invalidate(_ reason: RecoveryAdmissionFailure) { port.invalidate(reason, scope: port.scope) }
     func expire() { port.expire(scope: port.scope, at: clock()) }
 
+    func scheduleExpiry() {
+        let expiryQueue = DispatchQueue.global(qos: .userInitiated)
+        expiryQueue.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in self?.expire() }
+    }
+
     var counters: RecoveryCaptureCounters {
         lock.lock()
         defer { lock.unlock() }
@@ -92,6 +101,7 @@ final class RecoveryCaptureRouter: @unchecked Sendable {
     let bypassRawProcessing: Bool
     private let lock = NSLock()
     private var attachment: RecoveryCaptureAttachment?
+    private var tombstone: RecoveryFixtureCaptureFilter?
     private var used = false
 
     init(bypassRawProcessing: Bool = false) { self.bypassRawProcessing = bypassRawProcessing }
@@ -102,14 +112,28 @@ final class RecoveryCaptureRouter: @unchecked Sendable {
         guard bypassRawProcessing, !used, candidate.port.scope.tapIdentifier == identifier else { return false }
         used = true
         attachment = candidate
+        tombstone = candidate.filter
         return true
+    }
+
+    func matchesCapture(scope: RecoveryOperationTarget, filter: RecoveryFixtureCaptureFilter) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let attachment else { return false }
+        return attachment.port.scope.binding.scope == scope
+            && attachment.port.scope.tapIdentifier == identifier && attachment.filter == filter
     }
 
     func route(type: CGEventType, event: CGEvent) -> RecoveryCaptureRoute {
         lock.lock()
         let current = attachment
+        let retired = tombstone
         lock.unlock()
         if let current { return current.route(type: type, event: event) }
+        if let retired, retired.ownsHeader(
+            sender: event.getIntegerValueField(.eventSourceUnixProcessID),
+            marker: event.getIntegerValueField(.eventSourceUserData)
+        ) { return .suppress }
         return bypassRawProcessing ? .passThrough : .legacy
     }
 

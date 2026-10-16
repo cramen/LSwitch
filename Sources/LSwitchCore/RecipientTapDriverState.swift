@@ -11,6 +11,7 @@ public enum RecipientTapDriverObservation: String, Equatable, Sendable {
     case ownDownAllowed, ownReleaseAllowed, ownDownBlocked, ownReleaseBlocked
     case ownDownAtTail, ownReleaseAtTail, unmatchedDownAllowed, unmatchedDownBlocked
     case unmatchedDownAtTail, unmatchedReleaseAtTail
+    case fixtureDownSuppressed, fixtureReleaseSuppressed
 }
 
 /// Только ограниченные метаданные. Enabled-поля — последний health sample, не новый системный запрос.
@@ -26,6 +27,7 @@ public struct RecipientTapDriverSnapshot: Sendable {
     public let headBlocked: Int
     public let tailObserved: Int
     public let disableNotifications: Int
+    public let fixtureSuppressed: Int
     public let observationsTruncated: Bool
     public let observations: [RecipientTapDriverObservation]
 }
@@ -34,6 +36,7 @@ public struct RecipientTapDriverSnapshot: Sendable {
 final class RecipientTapDriverState: @unchecked Sendable {
     static let maximumObservations = 256
     let bridge: RecoveryRecipientProbeBridge
+    let captureEndpoint = RecipientTapCaptureEndpoint()
     private let lock = NSLock()
     private var running = false
     private var headEnabled = false
@@ -44,6 +47,7 @@ final class RecipientTapDriverState: @unchecked Sendable {
     private var headBlocked = 0
     private var tailObserved = 0
     private var disableNotifications = 0
+    private var fixtureSuppressed = 0
     private var truncated = false
     private var observations: [RecipientTapDriverObservation] = []
 
@@ -113,8 +117,12 @@ final class RecipientTapDriverState: @unchecked Sendable {
         body()
     }
 
-    /// Единственный системный вход callback: не читает Unicode и shape чужого события.
+    /// Только явный fixture endpoint может читать payload. Его admission не вызывается под state lock.
     func observe(type: CGEventType, event: CGEvent, isHead: Bool) -> Bool {
+        if isHead, captureEndpoint.route(type: type, event: event) == .suppress {
+            recordFixtureSuppression(type: type)
+            return false
+        }
         lock.lock()
         defer { lock.unlock() }
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
@@ -151,10 +159,18 @@ final class RecipientTapDriverState: @unchecked Sendable {
                         && current.phase == "protected" && !current.handoverRequested,
                      cleanupCompleted: cleaned, loss: loss, headAllowed: headAllowed, headBlocked: headBlocked,
                      tailObserved: tailObserved, disableNotifications: disableNotifications,
+                     fixtureSuppressed: fixtureSuppressed,
                      observationsTruncated: truncated, observations: observations)
     }
 
     private var healthyLocked: Bool { running && headEnabled && tailEnabled && loss == nil && !cleaned }
+
+    private func recordFixtureSuppression(type: CGEventType) {
+        lock.lock()
+        defer { lock.unlock() }
+        fixtureSuppressed = increment(fixtureSuppressed)
+        appendLocked(type == .keyDown ? .fixtureDownSuppressed : .fixtureReleaseSuppressed)
+    }
 
     private func observeOwnedLocked(_ event: CGEvent, sender: Int64, marker: Int64) -> Bool {
         guard event.type == .keyDown || event.type == .keyUp,

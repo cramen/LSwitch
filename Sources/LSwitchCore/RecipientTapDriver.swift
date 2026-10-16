@@ -42,6 +42,18 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
 
     public func withProtection(_ body: () -> Void) { state.withProtection(body) }
 
+    /// Одноразовый endpoint готовится после capture reservation, до selection. Payload остаётся у Session.
+    @MainActor
+    func bindFixtureCapture(router: RecoveryCaptureRouter, filter: RecoveryFixtureCaptureFilter) -> Bool {
+        guard !Task.isCancelled, state.permitsMutation,
+              filter.senderProcessID == bridge.senderProcessID,
+              filter.downMarker > 0, filter.releaseMarker > 0, filter.downMarker != filter.releaseMarker,
+              filter.downMarker != SyntheticEventMarker.magic, filter.releaseMarker != SyntheticEventMarker.magic,
+              !bridge.owns(senderPID: Int64(filter.senderProcessID), marker: filter.downMarker),
+              !bridge.owns(senderPID: Int64(filter.senderProcessID), marker: filter.releaseMarker) else { return false }
+        return state.captureEndpoint.bind(router: router, filter: filter, scope: bridge.capturedScope)
+    }
+
     public func closeGeneration() { bridge.closeGeneration() }
 
     /// EOF не возобновляет прежний scope и не снимает target quarantine автоматически.

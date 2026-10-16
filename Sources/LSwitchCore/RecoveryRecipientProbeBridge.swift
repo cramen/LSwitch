@@ -21,6 +21,7 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
 
     var capturedTargetIdentity: RecoveryProcessIdentity { target }
     var capturedSenderIdentity: RecoveryProcessIdentity { sender }
+    var capturedScope: RecoveryOperationTarget { scope }
 
     @MainActor
     init?(

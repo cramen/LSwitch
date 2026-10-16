@@ -12,9 +12,12 @@ extension RecoveryIsolationProbeController {
             "stageBeforeCleanup": stageBeforeCleanup?.rawValue ?? "none", "expectedSequence": expectedSequence,
             "senderPID": getpid(), "targetPID": peer.processID, "separateProcesses": getpid() != peer.processID,
             "prefixPosting": "postToPid", "postedPrefixCount": postedPrefixCount,
+            "captureTransport": captureTransport.rawValue,
+            "postedRetiredPrefixCount": postedRetiredPrefixCount, "retiredPrefixBlocked": retiredPrefixBlocked,
             "postedChallengeCount": postedChallengeCount, "prefixReceiverUnchanged": prefixUnchanged,
             "challengeBlocked": challengeBlocked, "observationComplete": prefixUnchanged && challengeBlocked,
             "peerLossObserved": peerLossObserved, "childAbortObserved": childAbortObserved,
+            "protectionLossObserved": protectionLossObserved,
             "childStderrBytes": childStderrBytes,
             "childExitStatus": childExitStatus.map { $0 as Any } ?? NSNull(),
             "cleanupCompleted": cleanupCompleted, "payloadLogged": false, "automaticClipboardAccess": false,
@@ -59,6 +62,7 @@ extension RecoveryIsolationProbeController {
             "protectionAvailable": value.protectionAvailable, "permitsMutation": value.permitsMutation,
             "cleanupCompleted": value.cleanupCompleted, "loss": value.loss?.rawValue ?? "none",
             "headAllowed": value.headAllowed, "headBlocked": value.headBlocked, "tailObserved": value.tailObserved,
+            "fixtureSuppressed": value.fixtureSuppressed,
             "disableNotifications": value.disableNotifications, "observationsTruncated": value.observationsTruncated,
             "observations": value.observations.map(\.rawValue)
         ]

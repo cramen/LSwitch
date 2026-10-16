@@ -8,7 +8,13 @@ enum RecoveryIsolationProbe {
         guard arguments.contains("--recovery-isolation-probe") else { return nil }
         #if DEBUG
         guard Bundle.main.bundleIdentifier == "ru.cramen.lswitch" else { return 2 }
-        return RecoveryIsolationProbeController().run()
+        let options = arguments.filter { $0.hasPrefix("--recovery-isolation-capture=") }
+        guard options.count <= 1,
+              let transport = IsolationCaptureTransport(rawValue: options.first?.split(separator: "=").last
+                .map(String.init) ?? "session") else { return 2 }
+        let controller = RecoveryIsolationProbeController()
+        controller.captureTransport = transport
+        return controller.run()
         #else
         return 2
         #endif
@@ -16,9 +22,11 @@ enum RecoveryIsolationProbe {
 }
 
 #if DEBUG
+enum IsolationCaptureTransport: String { case session, recipient }
+
 enum IsolationProbeStage: String {
     case ready, configuring, focusing, startingDriver, selecting, capturing
-    case prefixSnapshot, challengeSnapshot, interactive, captureFailureSnapshot, closing
+    case prefixSnapshot, retiredPrefixSnapshot, challengeSnapshot, interactive, captureFailureSnapshot, closing
 }
 
 @MainActor
@@ -30,6 +38,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var session: RecoveryIsolationSession?
     var driver: RecipientTapDriver?
     var captureTap: EventTapCore?
+    var captureTransport = IsolationCaptureTransport.session
     var timer: Timer?
     var stage = IsolationProbeStage.ready
     var stageBeforeCleanup: IsolationProbeStage?
@@ -39,6 +48,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var nextFocusRequestAt: UInt64 = 0
     var snapshotPending = false
     var prefixPostedAt: UInt64?
+    var retiredPrefixPostedAt: UInt64?
     var challengePostedAt: UInt64?
     var challengeMatchedAt: UInt64?
     var status = "starting"
@@ -47,11 +57,14 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
     var childStderrBytes = 0
     var childExitStatus: Int32?
     var peerLossObserved = false
+    var protectionLossObserved = false
     var peerQuitRequested = false
     var childAbortObserved = false
     var prefixUnchanged = false
     var challengeBlocked = false
     var postedPrefixCount = 0
+    var postedRetiredPrefixCount = 0
+    var retiredPrefixBlocked = false
     var postedChallengeCount = 0
     var driverBeforeCleanup: RecipientTapDriverSnapshot?
     var sessionBeforeCleanup: RecoveryIsolationReport?
@@ -70,7 +83,7 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         application.mainMenu = previousMenu
         _ = application.setActivationPolicy(previousPolicy)
         printReport(event: "final")
-        return cleanupCompleted && prefixUnchanged && challengeBlocked && !childAbortObserved
+        return cleanupCompleted && prefixUnchanged && challengeBlocked && !childAbortObserved && !protectionLossObserved
             && childExitStatus == 0 && status == "operator_finished" ? 0 : 1
     }
 
@@ -99,6 +112,8 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
         if stage == .focusing, now >= nextFocusRequestAt { requestFocusSnapshot(now: now) }
         if stage == .capturing { observeCapture(now: now) }
         if stage == .challengeSnapshot, now >= nextFocusRequestAt { requestChallengeSnapshot(now: now) }
+        if stage == .retiredPrefixSnapshot, now >= nextFocusRequestAt { requestRetiredPrefixSnapshot(now: now) }
+        if stage == .interactive { observeInteractiveProtection() }
     }
 
     private func consumeMailbox() -> Bool {
@@ -123,6 +138,15 @@ final class RecoveryIsolationProbeController: NSObject, NSApplicationDelegate {
             showRecovery()
             printReport(event: "peer_lost_retained")
         } else { finish("peer_lost_before_interactive") }
+    }
+
+    private func observeInteractiveProtection() {
+        guard !peerLossObserved, !peerQuitRequested, !protectionLossObserved,
+              driver?.isProtectionAvailable != true || session?.targetIsCurrent != true else { return }
+        protectionLossObserved = true
+        session?.markPeerUnavailable()
+        showRecovery()
+        printReport(event: "protection_lost_retained")
     }
 
     @objc func closeReceiver() {

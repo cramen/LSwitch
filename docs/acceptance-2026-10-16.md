@@ -66,8 +66,50 @@ active=false, focused=false, sequence 32. Текст fixture неизменён,
 
 Read-only системные флаги подтвердили `CGSSessionScreenIsLocked=true` и
 `kCGSSessionOnConsoleKey=true`. Пользователю предложена ручная разблокировка;
-обход блокировки не выполняется. Capture, изоляция двух PID и ввод в recovery
-редактор пока не приняты. Прохождение postToPid через session tap ещё не установлено.
+обход блокировки не выполняется. На этом этапе capture, изоляция двух PID и ввод
+в recovery-редактор не были приняты.
+
+После подтверждённой пользователем разблокировки третий кандидат из `3882051`
+с SHA `33b49f81fbd3f1a40a747dd5c894afc5c8f286720e66c9877abd8ab09d394082`
+дошёл до active/focused receiver и собственного выделения. Отправлены два prefix
+пакета через postToPid; session capture получил **0 событий/0 чтений payload**.
+Per-PID head заблокировал Down, а Up дошёл до tail и NSTextView. Текст и выделение
+fixture не изменились. Итог `session_capture_unobserved`, 1000 мс, child exit 0,
+stderr 0, cleanup=true. Пустая recovery-запись принята, но это не приёмка сохранения
+реального префикса. Локаторы: `.build/recovery-isolation-v3.{jsonl,stderr}`,
+`.build/recovery-isolation-v3-manifest.json`. Подпись проверена с доступом к keychain;
+sandbox-only codesign ранее не видел доверие сертификату.
+
+Этот опыт подтвердил обход общего session tap адресным postToPid. Следующий
+диагностический кандидат выбирает capture в per-PID head до selection; исходный
+маршрут оставлен отдельной опцией для сравнения. Ограничения допуска 4.2 сохраняются.
+
+Четвёртый кандидат SHA
+`dd21f71d8b790363f7a6aa9848e28ba60fcb9693bee9ac6f88756ad2c20bd640`
+с `--recovery-isolation-capture=recipient` подтвердил реальный capture/handover.
+За 909 мс получено interactive_ready: captured=2, UTF16=16 байт, payload reads=2,
+adopted/detached=true. Child не получил prefix, его текст/выделение неизменны,
+changeCount=0. После detach повторная prefix-пара также подавлена: суммарный
+fixtureSuppressed=4, очередь и reads не выросли. Challenge Down заблокирован,
+только Release дошёл до tail/child, headBlocked=1. Это nil-return и наблюдение
+NSTextView, не ACK всех способов мутации и не полный допуск 4.2.
+
+CUA подтвердил metadata-only окно с 2 событиями/16 байтами. Явное раскрытие
+показало точный фиксированный фрагмент; редактирование его RAM-копии в другом
+процессе работало. Cmd+E закрыл собственный child: UI показал недоступность защиты
+и снова скрыл payload. После повторного раскрытия исходный фрагмент и отредактированная
+копия сохранились. Clipboard не использовался. Финал operator_finished через 66432 мс:
+child exit 0, cleanup=true, stderr=0, revealCount=2, events=2/bytes=16, reads=2;
+replayAuthorized/productionGateAccepted=false. Обычный LSwitch восстановлен.
+Локаторы: `.build/recovery-isolation-v4.{jsonl,stderr}`,
+`.build/recovery-isolation-v4-manifest.json`, `.build/recovery-isolation-v4-ui.json`.
+
+После этих изменений полный локальный `make test` прошёл **776 тестов без failures
+и skipped**. Включены 9 новых driver/endpoint и 6 Session/Router регрессий;
+прежние три real-global-tap проверки в разблокированном окружении также выполнились.
+Логи `.build/recovery-isolation-perpid-{build,full-test}.log` и
+`.build/recipient-capture-targeted-tests.log`; независимый review CLEAN,
+`openspec validate --all --strict` — 6/6. Исторические пропуски не переименованы в PASS.
 
 Рабочий bundle `.build/LSwitch.app` не заменялся; SHA:
 `7f52d970e38630d83ded9806d2ffecc15503060f9ebe4e9cf92837b32f67c61f`.
@@ -80,8 +122,9 @@ Read-only системные флаги подтвердили `CGSSessionScreen
 report отмечает retainedBeforeAdoption/preAdoptLossUnresolved. Disable-return и EOF
 не отменяют pending native/AX команды и не снимают Down/Up debt. Ожидания start/stop
 ограничены 500/250 мс; это не отмена зависшего native tapCreate. Cleanup сообщается
-только после фактической очистки. Системная проверка в разблокированной сессии
-остаётся обязательной.
+только после фактической очистки. Двухпроцессный capture/handover и EOF после adopt
+проверены отдельно выше. Потеря защиты до adopt и полная системная матрица
+остаются обязательными.
 
 ## CI текущего контура
 

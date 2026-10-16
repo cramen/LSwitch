@@ -310,6 +310,22 @@ target identity; все части операции используют оди�
 отказ gate собственной фильтрацией. До полноценной системной и внешней приёмки
 production factory, обычный replay permit и фактическое runtime wiring не включаются.
 
+Живой опыт 2026-10-16 после разблокировки показал, что `postToPid` обходит общий
+session tap: captured=0, per-PID head отклонил prefix Down, а prefix Up дошёл до
+receiver без изменения текста. Для отдельного следующего кандидата capture
+подключается непосредственно к per-PID head. Транспорт выбирается до selection;
+одновременного захвата через два tap нет. Это исправление диагностического
+маршрута, не разрешение production gate и не изменение критериев его допуска.
+
+Head вызывает тот же CaptureRouter/Port до registry/quarantine и вне driver lock,
+чтобы не создавать цикл capture→admission→driver. Только `.suppress` возвращает nil;
+остальные события продолжают прежнюю проверку gate. Session сильно владеет router,
+driver хранит слабую ссылку и неизменяемые fixture headers: после detach/освобождения
+endpoint старые prefix Down/Up блокируются без чтения payload. Binding одноразовый,
+связан с тем же bridge и endpoint UUID. Lease, лимиты и protected detach не ослабляются.
+Expiry, stale callbacks, loss и конкуренция close/capture проверяются отдельно;
+отключение native tap по-прежнему может обойти callback и остаётся ограничением.
+
 ## Risks / Trade-offs
 
 - Отказ внешнего API после submission → неизвестный исход и recovery, а не повторная мутация.

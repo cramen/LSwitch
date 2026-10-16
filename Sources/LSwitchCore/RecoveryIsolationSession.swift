@@ -73,6 +73,32 @@ public final class RecoveryIsolationSession {
 
     public var targetIsCurrent: Bool { identityCheck(sender) && identityCheck(target) }
 
+    /// Альтернативный upfront маршрут. Общий session tap для этой операции не создаётся.
+    public func prepareRecipientCapture(on driver: RecipientTapDriver) -> Bool {
+        prepareRecipientCapture(protection: driver, bind: { router, filter in
+            driver.bindFixtureCapture(router: router, filter: filter)
+        })
+    }
+
+    func prepareRecipientCapture(
+        protection: any RecoveryIsolationProtecting,
+        bind: (RecoveryCaptureRouter, RecoveryFixtureCaptureFilter) -> Bool
+    ) -> Bool {
+        let router = RecoveryCaptureRouter(bypassRawProcessing: true)
+        guard prepareCapture(router: router, protection: protection) else { return false }
+        guard bind(router, filter), !Task.isCancelled, targetIsCurrent, let attachment else {
+            markPeerUnavailable()
+            return false
+        }
+        attachment.expire()
+        guard attachment.port.permitsMutation(for: attachment.port.scope) else {
+            markPeerUnavailable()
+            return false
+        }
+        attachment.scheduleExpiry()
+        return true
+    }
+
     public func prepareCapture(on tap: EventTapCore, protection: any RecoveryIsolationProtecting) -> Bool {
         guard tap.state == .running, !tap.hasLegacyInputHold,
               prepareCapture(router: tap.recoveryCaptureRouter, protection: protection), let attachment else {

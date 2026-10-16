@@ -75,15 +75,20 @@ extension RecoveryIsolationProbeController {
         stage = .startingDriver
         Task {
             guard await driver.start(), !finished else { return finish("driver_unavailable") }
-            let tap = EventTapCore.recoveryFixtureTap()
-            captureTap = tap
-            guard peer.isRunning, tap.start(), session.prepareCapture(on: tap, protection: driver),
+            guard peer.isRunning, prepareCapture(session: session, driver: driver),
                   NSWorkspace.shared.frontmostApplication?.processIdentifier == peer.processID,
                   session.beginFixtureSelectionCommand() else { return finish("capture_preparation_failed") }
             guard let sequence = peer.send(.selectFixture) else { return finish("selection_command_failed") }
             expectedSequence = sequence
             stage = .selecting
         }
+    }
+
+    private func prepareCapture(session: RecoveryIsolationSession, driver: RecipientTapDriver) -> Bool {
+        if captureTransport == .recipient { return session.prepareRecipientCapture(on: driver) }
+        let tap = EventTapCore.recoveryFixtureTap()
+        captureTap = tap
+        return tap.start() && session.prepareCapture(on: tap, protection: driver)
     }
 
     func observeSelection(_ message: IsolationChildMessage) {
@@ -104,11 +109,11 @@ extension RecoveryIsolationProbeController {
     }
 
     func observeCapture(now: UInt64) {
-        guard let session, let tap = captureTap, let prefixPostedAt else { return finish("capture_missing") }
+        guard let session, let prefixPostedAt else { return finish("capture_missing") }
         let captured = session.report.capturedEvents
         guard captured == 2 || now - prefixPostedAt > 500_000_000 else { return }
-        let adopted = session.finishForRecovery(on: tap)
-        tap.stop()
+        let adopted = session.finishForRecovery(on: captureTap)
+        captureTap?.stop()
         guard adopted else { return finish("capture_handover_unavailable") }
         guard let sequence = peer.send(.snapshot) else { return finish("prefix_snapshot_failed") }
         expectedSequence = sequence
@@ -120,6 +125,7 @@ extension RecoveryIsolationProbeController {
         switch stage {
         case .captureFailureSnapshot: finish("session_capture_unobserved")
         case .prefixSnapshot: observePrefix(message)
+        case .retiredPrefixSnapshot: observeRetiredPrefix(message)
         case .challengeSnapshot: observeChallenge(message)
         default: finish("unexpected_child_reply")
         }
@@ -127,10 +133,49 @@ extension RecoveryIsolationProbeController {
 
     func observePrefix(_ message: IsolationChildMessage) {
         guard message.fixtureTextUnchanged == true, message.fixtureSelectionUnchanged == true,
-              message.changeCount == 0, message.received.isEmpty, let markers else {
+              message.changeCount == 0, message.received.isEmpty, retainedPrefixMatches,
+              driver?.snapshot.tailObserved == 0, let markers else {
             return finish("prefix_reached_receiver")
         }
         prefixUnchanged = true
+        if captureTransport == .recipient {
+            guard postFixture(marker: markers.prefixDown, isDown: true, text: "kept") else {
+                return finish("retired_prefix_down_failed")
+            }
+            postedRetiredPrefixCount += 1
+            guard postFixture(marker: markers.prefixRelease, isDown: false, text: "kept") else {
+                return finish("retired_prefix_release_failed")
+            }
+            postedRetiredPrefixCount += 1
+            retiredPrefixPostedAt = DispatchTime.now().uptimeNanoseconds
+            stage = .retiredPrefixSnapshot
+            nextFocusRequestAt = 0
+        } else { beginChallenge() }
+    }
+
+    func requestRetiredPrefixSnapshot(now: UInt64) {
+        guard !snapshotPending else { return }
+        guard let sequence = peer.send(.snapshot) else { return finish("retired_prefix_snapshot_failed") }
+        expectedSequence = sequence
+        snapshotPending = true
+        nextFocusRequestAt = now + 50_000_000
+    }
+
+    func observeRetiredPrefix(_ message: IsolationChildMessage) {
+        snapshotPending = false
+        guard message.fixtureTextUnchanged == true, message.fixtureSelectionUnchanged == true,
+              message.changeCount == 0, message.received.isEmpty, let postedAt = retiredPrefixPostedAt else {
+            return finish("retired_prefix_reached_receiver")
+        }
+        let elapsed = DispatchTime.now().uptimeNanoseconds - postedAt
+        if elapsed >= 150_000_000, retainedPrefixMatches, driver?.snapshot.tailObserved == 0 {
+            retiredPrefixBlocked = true
+            beginChallenge()
+        } else if elapsed > 1_000_000_000 { finish("retired_prefix_observation_timeout") }
+    }
+
+    private func beginChallenge() {
+        guard let markers else { return finish("challenge_markers_missing") }
         showRecovery()
         guard postFixture(marker: markers.challengeDown, isDown: true, text: "a") else {
             return finish("challenge_down_failed")
@@ -158,12 +203,15 @@ extension RecoveryIsolationProbeController {
         guard let postedAt = challengePostedAt else { return finish("challenge_missing") }
         let now = DispatchTime.now().uptimeNanoseconds
         guard message.fixtureTextUnchanged == true, message.fixtureSelectionUnchanged == true,
-              message.changeCount == 0, !message.received.contains("challengeDown") else {
+              message.changeCount == 0, !message.received.contains("challengeDown"), retainedPrefixMatches else {
             return finish("challenge_reached_receiver")
         }
         if message.received == ["challengeRelease"], driver?.snapshot.headBlocked == 1 {
             if challengeMatchedAt == nil { challengeMatchedAt = now }
             if let matched = challengeMatchedAt, now - matched >= 150_000_000 {
+                guard driver?.refreshProtection() == true, session?.targetIsCurrent == true else {
+                    return finish("challenge_protection_lost")
+                }
                 challengeBlocked = true
                 stage = .interactive
                 status = "interactive_ready"
@@ -172,6 +220,14 @@ extension RecoveryIsolationProbeController {
             }
         }
         if now - postedAt > 1_000_000_000 { finish("challenge_observation_timeout") }
+    }
+
+    private var retainedPrefixMatches: Bool {
+        guard let report = session?.report, report.capturedEvents == 2, report.capturedUTF16Bytes == 16,
+              report.payloadCountReads == 2, report.rejectedFixtureEvents == 0,
+              report.captureDetached, report.adopted, report.eventsRemaining == 2,
+              report.utf16BytesRemaining == 16 else { return false }
+        return captureTransport != .recipient || driver?.snapshot.fixtureSuppressed == 2 + postedRetiredPrefixCount
     }
 
     /// Только собственные fixture marker и точный child PID, независимо от приложения на переднем плане.
