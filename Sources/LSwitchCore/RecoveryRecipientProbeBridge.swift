@@ -6,7 +6,9 @@ import Foundation
 /// Worker не читает Unicode, не вызывает proc_pidinfo и не обращается к MainActor ledger.
 public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
     public let processID: Int32
+    public let senderProcessID: Int32
     private let owner = UUID()
+    private let sender: RecoveryProcessIdentity
     private let target: RecoveryProcessIdentity
     private let scope: RecoveryOperationTarget
     private let gate: RecipientGateState
@@ -15,14 +17,29 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
     @MainActor private var tokens: [RecoveryRecipientProbePhase: ConversionSafetySubmissionToken] = [:]
     @MainActor private var returned = Set<RecoveryRecipientProbePhase>()
     @MainActor private var ledgerCounts = RecoveryRecipientProbeLedgerCounts()
+    private let identityCheck: @MainActor @Sendable (RecoveryProcessIdentity) -> Bool
+
+    var capturedTargetIdentity: RecoveryProcessIdentity { target }
+    var capturedSenderIdentity: RecoveryProcessIdentity { sender }
 
     @MainActor
-    private init(target: RecoveryProcessIdentity, ledger: ConversionSafetyLedger, gate: RecipientGateState) {
+    init?(
+        sender: RecoveryProcessIdentity, target: RecoveryProcessIdentity,
+        ledger: ConversionSafetyLedger, gate: RecipientGateState,
+        identityCheck: @escaping @MainActor @Sendable (RecoveryProcessIdentity) -> Bool = {
+            SystemProcessIdentity.isCurrent($0)
+        }
+    ) {
+        let scope = RecoveryOperationTarget(operation: ledger.operation, target: target)
+        guard gate.scope == scope else { return nil }
+        self.sender = sender
         self.target = target
         self.ledger = ledger
         self.gate = gate
+        self.identityCheck = identityCheck
         processID = target.processID
-        scope = RecoveryOperationTarget(operation: ledger.operation, target: target)
+        senderProcessID = sender.processID
+        self.scope = scope
     }
 
     @MainActor
@@ -31,12 +48,12 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
         let ledger = ConversionSafetyLedger(generation: 1)
         let scope = RecoveryOperationTarget(operation: ledger.operation, target: target)
         guard let gate = RecipientGateState(scope: scope) else { return nil }
-        return RecoveryRecipientProbeBridge(target: target, ledger: ledger, gate: gate)
+        return RecoveryRecipientProbeBridge(sender: target, target: target, ledger: ledger, gate: gate)
     }
 
     @MainActor
     public func preparePair(keyCode: UInt16, downFlags: UInt64, releaseFlags: UInt64) -> Bool {
-        guard SystemProcessIdentity.isCurrent(target) else { markLost(); return false }
+        guard identitiesAreCurrent else { markLost(); return false }
         guard observations.snapshot.pair == nil else { return false }
         let shape = NativeDispatchPairShape(
             down: .init(phase: .keyDown, keyCode: keyCode, modifierFlags: downFlags),
@@ -50,7 +67,7 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
     /// App вызывает только после создания и проверки собственных head/tail taps; это не production prearm.
     @MainActor
     public func activateProtection() -> Bool {
-        guard SystemProcessIdentity.isCurrent(target) else { markLost(); return false }
+        guard identitiesAreCurrent else { markLost(); return false }
         guard gate.activateProtection(scope: scope) else { return false }
         observations.recordProtectionStarted()
         return true
@@ -63,7 +80,7 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
 
     /// Сначала sender PID, затем точный reserved marker. Shape вызывающий читает лишь после true.
     public func owns(senderPID: Int64, marker: Int64) -> Bool {
-        let sourceMatches = senderPID == Int64(processID)
+        let sourceMatches = senderPID == Int64(senderProcessID)
         let markerMatches = sourceMatches && gate.ownsReservedMarker(marker, target: target)
         observations.recordLookup(sourceMatches: sourceMatches, markerMatches: markerMatches)
         return markerMatches
@@ -72,7 +89,7 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
     /// Событие уже создано, marker/shape roundtrip и фокус проверены App. Следующий шаг — непосредственный post.
     @MainActor
     public func registerBeforePost(isDown: Bool) -> Bool {
-        guard SystemProcessIdentity.isCurrent(target) else {
+        guard identitiesAreCurrent else {
             observations.recordRegistrationRefusal(afterLedger: false)
             markLost()
             return false
@@ -144,10 +161,20 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
         observations.recordLoss()
     }
 
+    public var permitsMutation: Bool { gate.snapshot.permitsMutation }
+
+    public var isProtectionAvailable: Bool {
+        observations.snapshot.protectionStarted && gate.snapshot.phase != .lost
+    }
+
+    @MainActor
+    private var identitiesAreCurrent: Bool { identityCheck(sender) && identityCheck(target) }
+
     /// Только MainActor. Disable/lost/timer сами не создают observation и не завершают pending submission.
     @MainActor
     @discardableResult
     public func drainObservations() -> RecoveryRecipientProbeSnapshot {
+        ledgerCounts.submissions = ledger.submissionCount
         for observation in observations.drain() {
             if observation.admitted {
                 if ledger.observe(.admitted, for: observation.token) { ledgerCounts.admitted += 1 }

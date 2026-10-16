@@ -4,32 +4,25 @@ import Dispatch
 import Foundation
 import os
 
-/// Глобальный перехват клавиатуры через CGEventTap (спайк P0.1).
-///
-/// Доставка следующей клавиши ждёт завершения синхронной замены на главном потоке.
-/// Для уже ожидавших клавиш исправляется Unicode после подтверждённой смены раскладки;
-/// остальные события возвращаются без изменений.
-/// Callback только извлекает поля события в `RawKeyEvent` и
-/// передаёт его в выделенную последовательную очередь — никакого I/O в
-/// hot path. При отключении tap системой (timeout / user input) и после
-/// sleep/wake или смены сессии tap пересоздаётся автоматически (design D3).
+/// Глобальный CGEventTap передаёт raw события в последовательную очередь, без AX/TIS/IO в callback.
+/// Legacy hold ждёт cleanup; opt-in recovery использует отдельного владельца очереди.
+/// Отключение и смена сессии пересоздают tap, инвалидируя прежний recovery scope.
 public final class EventTapCore {
-
     public typealias Handler = (RawKeyEvent) -> Void
-
     public enum State: Equatable {
         case stopped
         case running
         /// Tap отключён системой, идёт пересоздание.
         case recovering
     }
-
     private let handler: Handler
     private let processingQueue: DispatchQueue
     private let logger = Logger(subsystem: "LSwitch", category: "EventTap")
     private let correctionLock = NSLock()
     private var queuedInputCorrection: QueuedInputCorrection?
     private let inputBuffer = InputEventBuffer()
+    let recoveryCaptureRouter: RecoveryCaptureRouter
+    var hasLegacyInputHold: Bool { inputBuffer.isActive }
 
     private var machPort: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
@@ -53,9 +46,13 @@ public final class EventTapCore {
         self.init(handler: handler, processingQueue: DispatchQueue(label: "lswitch.eventtap.processing"))
     }
 
-    init(handler: @escaping Handler, processingQueue: DispatchQueue) {
+    init(
+        handler: @escaping Handler, processingQueue: DispatchQueue,
+        recoveryCaptureRouter: RecoveryCaptureRouter = RecoveryCaptureRouter()
+    ) {
         self.handler = handler
         self.processingQueue = processingQueue
+        self.recoveryCaptureRouter = recoveryCaptureRouter
     }
 
     /// После hold пропускает захваченные ранее raw-события через обе очереди потребителя.
@@ -72,7 +69,7 @@ public final class EventTapCore {
 
     @MainActor
     public func beginInputHold() -> Bool {
-        guard state == .running,
+        guard state == .running, !recoveryCaptureRouter.bypassRawProcessing,
               let generation = inputBuffer.begin(at: DispatchTime.now().uptimeNanoseconds) else {
             #if DEBUG
             diagnosticsMetrics?.increment(.holdRefusals)
@@ -130,6 +127,7 @@ public final class EventTapCore {
     }
 
     deinit {
+        recoveryCaptureRouter.invalidate(.interceptionStopped)
         healthTimer?.invalidate()
         // Не захватываем уничтожаемый self асинхронно. Наблюдатели удаляются на main.
         let observers = workspaceObservers
@@ -172,6 +170,7 @@ public final class EventTapCore {
         healthTimer?.invalidate()
         healthTimer = nil
         inputBuffer.cancelLease()
+        recoveryCaptureRouter.invalidate(.interceptionStopped)
         workspaceObservers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         workspaceObservers.removeAll()
         // Владелец операции вызовет endInputHold после cleanup. До этого ввод остаётся в очереди.
@@ -237,6 +236,11 @@ extension EventTapCore {
             return Unmanaged.passUnretained(event)
         }
 
+        switch recoveryCaptureRouter.route(type: type, event: event) {
+        case .legacy: break
+        case .passThrough: return Unmanaged.passUnretained(event)
+        case .suppress: return nil
+        }
         if inputBuffer.intercept(type: type, event: event, at: DispatchTime.now().uptimeNanoseconds) {
             #if DEBUG
             diagnosticsMetrics?.increment(.heldEvents)
@@ -254,6 +258,7 @@ extension EventTapCore {
     }
 
     private func scheduleRecovery(reason: String) {
+        recoveryCaptureRouter.invalidate(.gateUnavailable)
         inputBuffer.cancelLease()
         #if DEBUG
         diagnosticsMetrics?.invalidateHold()

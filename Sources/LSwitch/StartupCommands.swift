@@ -11,6 +11,8 @@ enum StartupCommands {
         }
         if arguments.contains("--verify-resources") { return verifyResources() }
         if arguments.contains("--probe") { Probe.run() }
+        if let status = RecoveryIsolationReceiver.runIfRequested(arguments: arguments) { return status }
+        if let status = RecoveryIsolationProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryWindowPreview.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryReceiverProbe.runIfRequested(arguments: arguments) { return status }
         return AcceptanceProbe.runIfRequested(arguments: arguments)

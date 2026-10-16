@@ -291,6 +291,25 @@ review гонка final external isValid после permitsReceipt в clipboard/
 production TTL и не проверяет graceful quit реальной очереди. Полный протокол и SHA
 кандидата — в `docs/acceptance-2026-10-15.md`. Системный gate и production P1 остаются открытыми.
 
+#### D7.3. Два собственных процесса и настоящий capture handover
+
+Следующая интеграция использует тот же подписанный bundle: отдельный DEBUG receiver
+с единственным фиксированным NSTextView и sender с существующим recovery-окном.
+Ограниченные inherited pipes передают только nonce, готовность, шаги, счётчики и
+точные booleans текста/каретки. Payload событий и содержимое редактора не передаются.
+Sender сверяет PID и birth независимо от pipe; смерть/EOF/новый процесс закрывают
+старый scope без rearm/replay. Новые разрешения TCC не запрашиваются.
+
+Переиспользуются RecipientGateState, worker, RecoveryOperation/CapturePort,
+RecoveryCoordinator и RecoveryWindowController. Sender identity отделяется от
+target identity; все части операции используют один ledger. Принятый префикс
+должен пройти настоящий callback и CapturePort, а не populate готового batch.
+При handover capture attachment снимается, target quarantine сохраняется,
+а recovery-редактор другого PID принимает контрольный ввод. Известный отрицательный
+пакет при утечке обязан попасть в обычный NSTextView dispatch: receiver не маскирует
+отказ gate собственной фильтрацией. До полноценной системной и внешней приёмки
+production factory, обычный replay permit и фактическое runtime wiring не включаются.
+
 ## Risks / Trade-offs
 
 - Отказ внешнего API после submission → неизвестный исход и recovery, а не повторная мутация.

@@ -90,6 +90,14 @@ D7.1 design описывает следующий чистый кандидат 
 логи `.build/input-recovery-ownership-{build,test}.log`, независимые review CLEAN.
 Системный bridge D7.2 и production wiring не входят в этот результат.
 
+D7.3 реализован как диагностическая интеграция общего ledger, driver, CapturePort
+и двух собственных процессов. Добавлены 30 компонентных проверок; локальный прогон
+761/0 failures содержит 3 skip прежних real-global-tap тестов. Старый snapshot 688
+воспроизводит те же skip. Живые попытки завершились до отправки клавиш: исправлено
+чтение короткого IPC frame, затем обнаружена заблокированная macOS-сессия.
+Разблокировка запрошена; capture и изоляция двух PID ещё не приняты.
+Подробности и точные бинарники — `docs/acceptance-2026-10-16.md`.
+
 DEBUG bridge с тем же Core registry добавил 5 модельных проверок callback-протокола;
 локальный общий прогон — 731 тест, 0 failures/skipped, лог
 `.build/input-recovery-registry-bridge-test.log`. Они не доказывают системный nil-return.
@@ -140,13 +148,14 @@ handover и graceful quit реальной очереди этим preview не 
 final-validation race и UI-счётчиков, но не будущие candidate gate/wiring-файлы.
 CI `06a95f7` подтвердил checkpoint 688: build/test и strict SwiftLint без нарушений.
 CI `955b006` подтвердил срез 726: build/test, 0 failures/skipped и strict SwiftLint
-без нарушений в 221 файле; `.build/checkpoint-955b006-ci.log`. Локальный срез 731
-с callback-protocol тестами остаётся отдельным результатом до нового CI. Готовность
-runtime не следует из количества компонентных тестов.
+без нарушений в 221 файле; `.build/checkpoint-955b006-ci.log`. CI `4905175` подтвердил
+731 тест и strict lint без нарушений в 225 файлах. Готовность runtime не следует
+из количества компонентных тестов.
 
 Финальный повторный build/test также прошёл 731/731 без failures/skipped:
 `.build/input-recovery-recipient-final-{build,test}.log`. Независимый review CLEAN;
-статические ограничения шести Swift-файлов соблюдены. Новый CI среза 731 ещё не запущен.
+статические ограничения шести Swift-файлов соблюдены. D7.3/761 требует собственного
+CI и разблокированной сессии для живой проверки.
 
 Всего 14 задач. План готовит реализацию, но не объявляет system gate или recovery UI
 готовым исправлением. Реализация чистых контрактов допускается первой; включение
