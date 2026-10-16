@@ -4,6 +4,31 @@
 к архивированию. Production factory, обычный replay permit и runtime wiring
 нового recovery-владельца остаются недоступными.
 
+## Компонентный профиль AX и отслеживаемый Converter
+
+После делегированного пользователем выбора принят контракт B из
+`openspec/changes/fix-input-recovery/runtime-contract-decision.md`.
+`observedUnderProfile` хранится отдельно от `receiverCompleted`; первым кандидатом
+остаётся прямой AX TextEdit 1.19 (404), macOS 14.5 (23F79). Любой профильный fault
+необратим внутри операции. Snapshot запрашивается только через bounded range после
+проверки count, без fallback к AXValue, максимум 65536 UTF-16 units.
+
+Session/Owner удерживают очередь независимо от lifetime Converter; один ledger
+проходит conversion и допустимый fallback, undo получает новую операцию.
+Непринятая factory не включает старый путь. TIS требует свежего финального допуска;
+receipt, cache и звук публикуются только после принятия очереди обычным transport.
+Принятое владение необратимо; отказ до первого claim монотонно разрешает recovery.
+
+Полные `make build` и `make test` завершились 16.10.2026 в 17:03:33 МСК:
+**877 тестов, 0 failures, 0 skipped**. Логи:
+`.build/input-recovery-profile-{build,test}.log`. Независимые review ledger,
+bounded AX и tracked Converter/Owner — CLEAN; `openspec validate --all --strict` — 6/6.
+Это компонентный срез, не живой допуск нового TextEdit-профиля или ordinary transport.
+Рабочий bundle не заменялся, задачи 2.1/3.1/4.2 остаются открытыми.
+
+Предыдущий отдельный quit-срез `adbe820f8c51deab8a9ad2479d8d98e37286c71f`
+прошёл [CI](https://github.com/cramen/LSwitch/actions/runs/38909468726).
+
 ## База и компонентные проверки
 
 Коммит `4905175ee22974ed9a9ebfb039bf09c1b6ac3a7e` прошёл

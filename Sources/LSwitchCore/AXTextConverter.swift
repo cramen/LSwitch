@@ -71,6 +71,7 @@ public final class AXTextConverter: ConversionEngine {
     private let access: any AXTextAccess
     private let transform: (String) -> String
     private let receiverContract: AXReceiverContract?
+    private let observationProfile: AXObservationProfile?
     private let logger = Logger(subsystem: "LSwitch", category: "AXConverter")
 
     public convenience init(transform: @escaping (String) -> String = { LayoutMap.shared.invert($0) }) {
@@ -80,11 +81,13 @@ public final class AXTextConverter: ConversionEngine {
     init(
         access: any AXTextAccess,
         transform: @escaping (String) -> String = { LayoutMap.shared.invert($0) },
-        receiverContract: AXReceiverContract? = nil
+        receiverContract: AXReceiverContract? = nil,
+        observationProfile: AXObservationProfile? = nil
     ) {
         self.access = access
         self.transform = transform
         self.receiverContract = receiverContract
+        self.observationProfile = observationProfile
     }
 
     public static func isSecureField(_ element: AXUIElement) -> Bool {
@@ -125,13 +128,17 @@ public final class AXTextConverter: ConversionEngine {
     private func performWithEvidence(
         _ request: ConversionRequest, transform: (String) -> String
     ) async -> AXConversionExecution {
-        let mutation = AXMutationSafety(request: request, receiverContract: receiverContract)
+        let mutation = AXMutationSafety(request: request, receiverContract: receiverContract,
+                                        profile: observationProfile)
         let execution = await execute(request, transform: transform, mutation: mutation)
+        switch execution.result {
+        case .success: break
+        default: mutation.failProfile(.snapshotMismatch)
+        }
         mutation.finishEvidence()
         let result: ConversionResult
-        if case .success = execution.result, let ledger = request.safetyLedger,
-           ledger.encounteredUnknown || ledger.decision != nil || ledger.hasUnresolvedSubmissions
-            || mutation.cleanup != .recoveredObserved || Task.isCancelled {
+        if case .success = execution.result, request.safetyLedger != nil,
+           !mutation.permitsReceipt || mutation.cleanup != .recoveredObserved || Task.isCancelled {
             result = logged(.failed, reason: "final-evidence-unconfirmed")
         } else if case .success = execution.result {
             result = logged(execution.result, reason: "replacement-confirmed")
@@ -161,8 +168,10 @@ public final class AXTextConverter: ConversionEngine {
         guard mutation.bind(to: element) else {
             return (logged(.blocked, reason: "receiver-contract-unavailable"), false)
         }
-        guard let text = access.text(in: element), let selection = access.selection(in: element),
-              let plan = AXReplacementPlan(text: text, selection: selection, request: request, transform: transform)
+        let initial = initialState(in: element, mutation: mutation)
+        guard let initial,
+              let plan = AXReplacementPlan(text: initial.text, selection: initial.selection,
+                                           request: request, transform: transform)
         else { return (logged(.unavailable, reason: "snapshot-or-plan-unavailable"), false) }
         guard request.permitsAutomaticContext(context, plan: plan), isCurrent(element, request: request) else {
             return (logged(.blocked, reason: "automatic-context-not-permitted"), plan.wasSelection)
@@ -186,12 +195,22 @@ public final class AXTextConverter: ConversionEngine {
         switch result {
         case .success:
             mutation.recordCleanup(.recoveredObserved) {
-                self.isCurrent(element, request: request)
+                if mutation.isProfileMode {
+                    return self.isCurrent(element, request: request)
+                        && mutation.observeProfileFinal(.init(plan.resultingText, plan.finalSelection))
+                        && self.isCurrent(element, request: request)
+                }
+                return self.isCurrent(element, request: request)
                     && mutation.textMatches(self.access.text(in: element), plan.resultingText)
                     && self.access.selection(in: element) == plan.finalSelection
                     && self.isCurrent(element, request: request)
             }
         default:
+            mutation.failProfile(Task.isCancelled ? .cancelled : .snapshotMismatch)
+            if mutation.isProfileMode {
+                mutation.recordCleanup(.recoveryUnconfirmed, validateFresh: { false })
+                return
+            }
             let evidence = await cleanup(plan, in: element, request: request, mutation: mutation)
             if evidence != .recoveredObserved { mutation.recordCleanup(evidence, validateFresh: { false }) }
         }
@@ -204,8 +223,7 @@ public final class AXTextConverter: ConversionEngine {
         mutation: AXMutationSafety
     ) async -> ConversionResult {
         guard isCurrent(element, request: request),
-              mutation.textMatches(access.text(in: element), plan.text),
-              access.selection(in: element) == plan.selection else {
+              matchesState(.init(plan.text, plan.selection), in: element, mutation: mutation) else {
             return logged(.blocked, reason: "snapshot-changed-before-selection")
         }
         guard request.beginMutation(), isCurrent(element, request: request) else {
@@ -224,12 +242,12 @@ public final class AXTextConverter: ConversionEngine {
                 let result: ConversionResult = isCurrent(element, request: request) ? .failed : .blocked
                 return logged(result, reason: "selection-not-settled")
             }
-            guard mutation.requireCompletion(.selectedRangeSettled) else {
+            guard mutation.requireCompletion(.selectedRangeSettled, expected: .init(plan.text, plan.range)) else {
                 return logged(.failed, reason: "selection-completion-unconfirmed")
             }
         }
-        guard isCurrent(element, request: request), mutation.textMatches(access.text(in: element), plan.text),
-              access.selection(in: element) == plan.range else {
+        guard isCurrent(element, request: request),
+              matchesState(.init(plan.text, plan.range), in: element, mutation: mutation) else {
             return logged(.blocked, reason: "context-changed-after-selection")
         }
         guard mutation.writeText(plan.replacement, in: element, access: access,
@@ -246,16 +264,20 @@ public final class AXTextConverter: ConversionEngine {
         mutation: AXMutationSafety
     ) async -> ConversionResult {
         guard isCurrent(element, request: request),
-              mutation.textMatches(access.text(in: element), plan.resultingText) else {
+              mutation.isProfileMode || mutation.textMatches(access.text(in: element), plan.resultingText) else {
             return logged(.failed, reason: "text-write-not-confirmed")
-        }
-        guard mutation.requireCompletion(.replacementObserved) else {
-            return logged(.failed, reason: "text-completion-unconfirmed")
         }
         let inserted = NSRange(location: plan.range.location, length: plan.replacement.utf16.count)
         let wordCaret = NSRange(location: plan.range.location + plan.receipt.converted.utf16.count, length: 0)
         let known = [inserted, plan.finalSelection, wordCaret]
-        guard let current = access.selection(in: element), known.contains(current),
+        guard mutation.requireCompletion(.replacementObserved,
+                                         expected: .init(text: plan.resultingText, selections: known)) else {
+            return logged(.failed, reason: "text-completion-unconfirmed")
+        }
+        let current = mutation.isProfileMode
+            ? mutation.profileRead(.init(text: plan.resultingText, selections: known))?.selection
+            : access.selection(in: element)
+        guard let current, known.contains(current),
               isCurrent(element, request: request),
               mutation.writeSelection(plan.finalSelection, in: element, access: access, restoring: true,
                                       isValid: { self.isCurrent(element, request: request) }) else {
@@ -266,7 +288,8 @@ public final class AXTextConverter: ConversionEngine {
             in: element, mutation: mutation, isValid: { self.isCurrent(element, request: request) }
         )
         guard settled else { return logged(.failed, reason: "final-state-not-settled") }
-        guard mutation.requireCompletion(.finalStateSettled) else {
+        guard mutation.requireCompletion(.finalStateSettled,
+                                         expected: .init(plan.resultingText, plan.finalSelection)) else {
             return logged(.failed, reason: "final-caret-completion-unconfirmed")
         }
         return .success(plan.receipt)
@@ -309,6 +332,12 @@ public final class AXTextConverter: ConversionEngine {
         await SelectionSettlement.wait(
             expected: expected, allowedSelections: allowed, isValid: isValid,
             read: {
+                if mutation.isProfileMode {
+                    guard let snapshot = mutation.profileRead(.init(expected.text, expected.selection)) else {
+                        return nil
+                    }
+                    return (snapshot.text, snapshot.selection)
+                }
                 guard let text = self.access.text(in: element),
                       let selection = self.access.selection(in: element),
                       mutation.textMatches(text, expected.text) else { return nil }
@@ -323,6 +352,24 @@ public final class AXTextConverter: ConversionEngine {
               cleanup ? request.canCleanup() : request.isValid(),
               let focused = access.focusedElement(), CFEqual(focused, element) else { return false }
         return !access.isProtected(element) && (cleanup || !tracked || !Task.isCancelled)
+    }
+
+    private func initialState(in element: AXUIElement, mutation: AXMutationSafety)
+        -> SelectionSettlement.State? {
+        if mutation.isProfileMode {
+            guard let snapshot = mutation.profileRead(nil) else { return nil }
+            return (snapshot.text, snapshot.selection)
+        }
+        guard let text = access.text(in: element), let selection = access.selection(in: element) else { return nil }
+        return (text, selection)
+    }
+
+    private func matchesState(
+        _ expected: AXProfileExpectedState, in element: AXUIElement, mutation: AXMutationSafety
+    ) -> Bool {
+        if mutation.isProfileMode { return mutation.profileRead(expected) != nil }
+        return mutation.textMatches(access.text(in: element), expected.text)
+            && access.selection(in: element) == expected.selections.first
     }
 
     private func logged(_ result: ConversionResult, reason: String) -> ConversionResult {

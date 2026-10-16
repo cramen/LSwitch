@@ -5,47 +5,20 @@ import Foundation
 public final class Converter {
     public typealias ContextCheck = @MainActor @Sendable () -> Bool
     public typealias ContextCapture = @MainActor () -> ContextCheck?
+    /// nil допустим только до захвата ввода. Начатая очередь обязана вернуться с удерживающей её Session.
+    public typealias RecoverySessionFactory = @MainActor (ConversionRecoveryContext) -> ConversionRecoverySession?
 
-    public enum Outcome: Equatable {
-        case converted(original: String, converted: String)
-        case undone
-        /// Текст изменён и доступен для точного undo, но целевая раскладка не подтверждена.
-        case partiallyConverted(original: String, converted: String, targetLayout: Layout)
-        /// Исходный текст восстановлен; использованная запись undo удалена, раскладка не подтверждена.
-        case partiallyUndone(targetLayout: Layout)
-        case blockedByRules
-        case blockedBySafety
-        case unsupportedLayout
-        case busy
-        case failed
-
-        /// Для диагностики записывается статус, а не пользовательский текст.
-        public var label: String {
-            switch self {
-            case .converted: return "converted"
-            case .undone: return "undone"
-            case .partiallyConverted: return "partiallyConverted"
-            case .partiallyUndone: return "partiallyUndone"
-            case .blockedByRules: return "blockedByRules"
-            case .blockedBySafety: return "blockedBySafety"
-            case .unsupportedLayout: return "unsupportedLayout"
-            case .busy: return "busy"
-            case .failed: return "failed"
-            }
-        }
-    }
-
-    private let currentLayout: () -> Layout?
-    private let switchLayout: (Layout) -> Bool
+    let currentLayout: () -> Layout?
+    let switchLayout: (Layout) -> Bool
     private let appRules: AppRules
-    private let undoStore: UndoStore
+    let undoStore: UndoStore
     private let frontmostBundleID: () -> String?
-    private let prefersClipboard: (String) -> Bool
-    private let makeAXEngine: () -> any ConversionEngine
-    private let makeClipboardEngine: () -> any ConversionEngine
-    private let makeUnicodeEngine: ((String) -> (any ConversionEngine)?)?
-    private let captureContext: ContextCapture?
-    private let onConverted: () -> Void
+    let prefersClipboard: (String) -> Bool
+    let makeAXEngine: () -> any ConversionEngine
+    let makeClipboardEngine: () -> any ConversionEngine
+    let makeUnicodeEngine: ((String) -> (any ConversionEngine)?)?
+    let captureContext: ContextCapture?
+    let onConverted: () -> Void
     private let onLayoutSwitched: (Layout, Layout, UInt64) -> Void
     private let beginInputHold: () -> Bool
     private let endInputHold: () -> Void
@@ -53,9 +26,16 @@ public final class Converter {
     private let drainPendingInput: () async -> Void
     private var inputHeld = false
     private var revision: UInt64 = 0
-    private var undoContext: ContextCheck?
-    private var undoDocumentTarget: ConversionReceipt.TargetCheck?
-    private var diagnosticAttempts: [String: Int] = [:]
+    var undoContext: ContextCheck?
+    var undoDocumentTarget: ConversionReceipt.TargetCheck?
+    var diagnosticAttempts: [String: Int] = [:]
+    private let recoverySessionFactory: RecoverySessionFactory?
+    private let recoveryOwner: ConversionRecoveryOwner?
+    private var retainedRecoverySession: ConversionRecoverySession?
+
+    public var hasPendingRecovery: Bool {
+        recoveryOwner?.hasPendingRecovery == true || retainedRecoverySession?.requiresRecovery == true
+    }
 
     private struct OperationContext {
         let bundleID: String
@@ -105,6 +85,8 @@ public final class Converter {
         makeAXEngine: @escaping () -> any ConversionEngine,
         makeClipboardEngine: @escaping () -> any ConversionEngine,
         makeUnicodeEngine: ((String) -> (any ConversionEngine)?)? = nil,
+        recoverySessionFactory: RecoverySessionFactory? = nil,
+        recoveryOwner: ConversionRecoveryOwner? = nil,
         captureContext: ContextCapture? = nil,
         beginInputHold: @escaping () -> Bool = { true },
         endInputHold: @escaping () -> Void = {},
@@ -122,6 +104,8 @@ public final class Converter {
         self.makeAXEngine = makeAXEngine
         self.makeClipboardEngine = makeClipboardEngine
         self.makeUnicodeEngine = makeUnicodeEngine
+        self.recoverySessionFactory = recoverySessionFactory
+        self.recoveryOwner = recoveryOwner
         self.captureContext = captureContext
         self.onConverted = onConverted
         self.onLayoutSwitched = onLayoutSwitched
@@ -169,6 +153,8 @@ extension Converter {
             diagnostics.reject(.busy)
             return .busy
         }
+        guard !hasPendingRecovery else { return .recoveryRequired }
+        guard recoveryOwner?.isOccupied != true else { return .busy }
         guard let bundleID, !appRules.isBlocked(bundleID: bundleID) else {
             diagnostics.reject(.rules)
             return .blockedByRules
@@ -181,6 +167,11 @@ extension Converter {
         guard let layout = currentLayout() else {
             diagnostics.reject(.unsupportedLayout)
             return .unsupportedLayout
+        }
+        if let factory = recoverySessionFactory {
+            return await runTracked(factory: factory, check: check, bundleID: bundleID, layout: layout,
+                                    expectedWord: expectedWord, trailingText: trailingText,
+                                    allowUndo: allowUndo, diagnostics: diagnostics)
         }
         isBusy = true
         defer {
@@ -207,6 +198,53 @@ extension Converter {
         )
         return await convert(expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
                              operation: operation)
+    }
+
+    private func runTracked(
+        factory: RecoverySessionFactory, check: @escaping ContextCheck, bundleID: String, layout: Layout,
+        expectedWord: String?, trailingText: String, allowUndo: Bool, diagnostics: ConversionDiagnostics
+    ) async -> Outcome {
+        isBusy = true
+        defer { isBusy = false }
+        guard let owner = recoveryOwner, let admission = owner.reserve() else {
+            diagnostics.reject(.holdUnavailable)
+            return .blockedBySafety
+        }
+        defer { owner.finishInvocation(admission) }
+        let started = revision
+        let context = ConversionRecoveryContext(
+            bundleID: bundleID, sourceLayout: layout, generation: started,
+            startedAt: DispatchTime.now().uptimeNanoseconds, admission: admission,
+            isCurrent: { [weak self] in
+                self?.revision == started && self?.frontmostBundleID() == bundleID && check()
+            }, canCleanup: { [weak self] in self?.frontmostBundleID() == bundleID && check() }
+        )
+        guard let session = factory(context) else {
+            if let pending = owner.session(for: admission) {
+                pending.retainIfUnfinished()
+                return .recoveryRequired
+            }
+            diagnostics.reject(.holdUnavailable)
+            return .blockedBySafety
+        }
+        guard let registered = owner.session(for: admission) else {
+            diagnostics.reject(.holdUnavailable)
+            return .blockedBySafety
+        }
+        guard registered === session else { registered.retainIfUnfinished(); return .recoveryRequired }
+        retainedRecoverySession = session
+        defer {
+            session.retainIfUnfinished()
+            if !session.requiresRecovery { retainedRecoverySession = nil }
+        }
+        guard session.matches(context) else { return .recoveryRequired }
+        return await trackedConversion(expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
+                                       context: context, session: session, diagnostics: diagnostics)
+    }
+
+    func cacheTrackedMode(_ mechanism: ConversionDiagnostics.Mechanism, bundleID: String) {
+        if mechanism == .accessibility { modeCache[bundleID] = .accessibility }
+        if mechanism == .clipboard { modeCache[bundleID] = .clipboard }
     }
 
     private func convert(
@@ -359,29 +397,4 @@ extension Converter {
         }
     }
 
-    /// Отдельно учитываем автоматический запрос, отменённый ещё до запуска Task конвертации.
-    public func recordSkippedAutomatic(
-        triggerTimestamp: UInt64, bundleID: String?, reason: ConversionDiagnostics.Rejection
-    ) {
-        let diagnostics = makeDiagnostics(bundleID: bundleID, triggerTimestamp: triggerTimestamp, automatic: true)
-        diagnostics.reject(reason)
-        diagnostics.complete(.skipped)
-    }
-
-    private func makeDiagnostics(
-        bundleID: String?, triggerTimestamp: UInt64?, automatic: Bool
-    ) -> ConversionDiagnostics {
-        let key = bundleID ?? "unknown"
-        let attempt = (diagnosticAttempts[key] ?? 0) + 1
-        diagnosticAttempts[key] = attempt
-        return ConversionDiagnostics(
-            bundleID: bundleID, triggerTimestamp: triggerTimestamp, attempt: attempt, automatic: automatic
-        )
-    }
-
-    private func captureCheck(diagnostics: ConversionDiagnostics) -> ContextCheck? {
-        if let captureContext { return captureContext() }
-        guard let target = InputSafety.captureTarget(diagnostics: diagnostics) else { return nil }
-        return { target.isCurrent(diagnostics: diagnostics) }
-    }
 }

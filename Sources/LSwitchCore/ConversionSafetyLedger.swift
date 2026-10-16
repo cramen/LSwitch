@@ -16,9 +16,24 @@ public final class ConversionSafetyLedger {
     private var usesRecordedCleanup = false
     private var cleanupRevision: UInt64 = 0
     private var activeCleanupObservation: ConversionSafetyCleanupObservation?
+    private var profile: ConversionSafetyProfileState?
+    private var ordinaryDeliveryRefused = false
 
     public init(generation: UInt64) {
         self.operation = ConversionSafetyOperationToken(generation: generation)
+    }
+
+    init(generation: UInt64, profile: ConversionSafetyProfileBinding) {
+        self.operation = ConversionSafetyOperationToken(generation: generation)
+        self.profile = ConversionSafetyProfileState(binding: profile)
+    }
+
+    var profileBinding: ConversionSafetyProfileBinding? { profile?.binding }
+    var hasProfileFault: Bool { profile?.fault != nil }
+    var profileFault: ConversionSafetyProfileFault? { profile?.fault }
+    var hasObservedProfileFinalState: Bool { profile?.finalStateObserved == true }
+    var hasUnacceptedSubmissions: Bool {
+        entries.values.contains { $0.resolution == nil && (profile == nil || !$0.observedUnderProfile) }
     }
 
     public var submissionCount: Int { entries.count }
@@ -26,13 +41,24 @@ public final class ConversionSafetyLedger {
     public var hasUnresolvedSubmissions: Bool { entries.values.contains { $0.resolution == nil } }
     public var hasUnknownSubmissions: Bool { entries.values.contains { $0.unknown && $0.resolution == nil } }
     public var hasOutstandingKeyDebt: Bool { !outstandingKeyDebt.isEmpty }
-    public var permitsOrdinarySubmission: Bool { decision == nil && !encounteredUnknown }
+    /// Исторический decision не является актуальным permit после отказа transport до claim.
+    public var currentInputDisposition: ConversionSafetyInputDisposition? {
+        ordinaryDeliveryRefused ? .recoveryRequired : decision?.input
+    }
+
+    public var permitsConfirmedResult: Bool {
+        decision?.permitsConfirmedResult == true && !ordinaryDeliveryRefused
+    }
+    public var permitsOrdinarySubmission: Bool {
+        decision == nil && !encounteredUnknown && !hasProfileFault && (profile == nil || !hasUnacceptedSubmissions)
+    }
 
     /// Вызывается после подготовки/guards, но ДО setter/post. Токен не заменяет системный допуск.
     public func willSubmit(
         _ kind: ConversionSafetySubmissionKind, operation token: ConversionSafetyOperationToken
     ) -> ConversionSafetySubmissionToken? {
-        guard permitsOrdinarySubmission, !kind.isCleanup else { return nil }
+        guard permitsOrdinarySubmission, !kind.isCleanup,
+              profile == nil || kind.changesEditor else { return nil }
         return append(kind, operation: token)
     }
 
@@ -40,7 +66,10 @@ public final class ConversionSafetyLedger {
     public func willSubmitCleanup(
         _ kind: ConversionSafetySubmissionKind, operation token: ConversionSafetyOperationToken
     ) -> ConversionSafetySubmissionToken? {
-        guard kind.isCleanup else { return nil }
+        guard kind.isCleanup,
+              profile == nil || (!hasProfileFault && !hasUnacceptedSubmissions && kind == .restoreSelection) else {
+            return nil
+        }
         return append(kind, operation: token)
     }
 
@@ -53,8 +82,12 @@ public final class ConversionSafetyLedger {
               entry.record(observation) else { return false }
         entries[token] = entry
         if observation == .unknown { encounteredUnknown = true }
+        if observation == .unknown { recordProfileFault(.unknownSubmission, operation: operation) }
+        if observation == .adapterReturned(false) { recordProfileFault(.writeRejected, operation: operation) }
+        if observation == .preventedBeforeAdmission { profile?.invalidate() }
         if entry.kind.changesEditor, observation == .unknown || observation == .receiverCompleted {
             invalidateCleanup()
+            profile?.invalidate()
         }
         return true
     }
@@ -67,6 +100,54 @@ public final class ConversionSafetyLedger {
               entry.kind != .balancingRelease, entry.resolution != .preventedBeforeAdmission,
               outstandingKeyDebt.insert(token).inserted else { return false }
         encounteredUnknown = true
+        recordProfileFault(.outstandingKeyDebt, operation: operation)
+        return true
+    }
+
+    /// Adapter вызывает перед свежим полным чтением; success RPC обязателен, но недостаточен.
+    func beginProfileObservation(
+        step: ConversionSafetyProfileStep, submission: ConversionSafetySubmissionToken? = nil,
+        binding: ConversionSafetyProfileBinding
+    ) -> ConversionSafetyProfileObservation? {
+        guard decision == nil, !hasProfileFault, binding == profile?.binding else { return nil }
+        if let submission {
+            guard submission.operation == operation, let entry = entries[submission],
+                  step.matches(entry.kind), entry.returned == true, !entry.unknown,
+                  entry.resolution == nil, !entry.observedUnderProfile else { return nil }
+        } else {
+            guard step == .finalState, !hasUnacceptedSubmissions,
+                  entries.values.contains(where: { $0.kind == .text && $0.observedUnderProfile }) else { return nil }
+        }
+        return profile?.begin(operation: operation, submission: submission, step: step)
+    }
+
+    /// Не записывает receiverCompleted. Проверки текста/identity принадлежат принятому AX adapter.
+    @discardableResult
+    func observeUnderProfile(
+        _ observation: ConversionSafetyProfileObservation, binding: ConversionSafetyProfileBinding
+    ) -> Bool {
+        guard decision == nil, observation.operation == operation, binding == profile?.binding else { return false }
+        if let token = observation.submission {
+            guard var entry = entries[token], !entry.observedUnderProfile, !entry.unknown,
+                  entry.returned == true, entry.resolution == nil, observation.step.matches(entry.kind),
+                  profile?.accept(observation) == true else { return false }
+            entry.observedUnderProfile = true
+            entries[token] = entry
+            invalidateCleanup()
+        } else {
+            guard !hasUnacceptedSubmissions, profile?.accept(observation) == true else { return false }
+        }
+        return true
+    }
+
+    /// В режиме B отрицательный исход необратим даже после позднего completion или совпавшего snapshot.
+    @discardableResult
+    func recordProfileFault(
+        _ reason: ConversionSafetyProfileFault, operation token: ConversionSafetyOperationToken
+    ) -> Bool {
+        guard token == operation, decision == nil, profile?.recordFault(reason) == true else { return false }
+        encounteredUnknown = true
+        invalidateCleanup()
         return true
     }
 
@@ -91,6 +172,9 @@ public final class ConversionSafetyLedger {
               activeCleanupObservation == observation else { return false }
         recordedCleanup = normalizedCleanup(evidence)
         activeCleanupObservation = nil
+        if evidence == .recoveryUnconfirmed, hasEditorMutation {
+            recordProfileFault(.cleanupUnconfirmed, operation: operation)
+        }
         return true
     }
 
@@ -113,26 +197,41 @@ public final class ConversionSafetyLedger {
         ordinaryRouteValid: Bool
     ) -> ConversionSafetyDecision? {
         guard token == operation, decision == nil else { return nil }
+        if text == .unknown { recordProfileFault(.unconfirmedResult, operation: operation) }
         // Старый аргумент поддержан только до opt-in в записываемое evidence.
         let currentCleanup = usesRecordedCleanup ? recordedCleanup ?? .recoveryUnconfirmed : requestedCleanup
         let cleanup = normalizedCleanup(currentCleanup)
-        let replay = ordinaryRouteValid && !hasUnresolvedSubmissions && !hasOutstandingKeyDebt
-            && cleanup != .recoveryUnconfirmed
+        let replay = ordinaryRouteValid && !hasUnacceptedSubmissions && !hasOutstandingKeyDebt
+            && cleanup != .recoveryUnconfirmed && !hasProfileFault
+            && (profile == nil || !hasEditorMutation || hasObservedProfileFinalState)
         let hasCompletedText = entries.values.contains { $0.kind == .text && $0.resolution == .receiverCompleted }
+        let acceptsText = profile == nil ? hasCompletedText : hasObservedProfileFinalState
+        let confirmed = text == .confirmed && replay && acceptsText && !encounteredUnknown
         let result = ConversionSafetyDecision(
             operation: operation, text: text, cleanup: cleanup,
             input: replay ? .replayAuthorized : .recoveryRequired,
-            permitsConfirmedResult: text == .confirmed && replay && hasCompletedText && !encounteredUnknown
+            permitsConfirmedResult: confirmed,
+            verificationBasis: confirmed ? (profile == nil ? .receiverCompleted : .observedUnderProfile) : .unconfirmed
         )
         decision = result
         activeCleanupObservation = nil
         return result
     }
 
+    /// Отменяет только ещё не использованное ordinary-разрешение. Не отменяет RPC/post и не выдаёт второй claim.
+    @discardableResult
+    func recordOrdinaryDeliveryRefusal(operation token: ConversionSafetyOperationToken) -> Bool {
+        guard token == operation, decision?.input == .replayAuthorized, inputOwner == .transaction else { return false }
+        ordinaryDeliveryRefused = true
+        return true
+    }
+
     /// Единственный claim определяет потребителя; он не утверждает, что события уже обработаны системой.
     public func claimInput(operation token: ConversionSafetyOperationToken) -> ConversionSafetyInputClaim? {
-        guard token == operation, let decision, inputOwner == .transaction else { return nil }
-        inputOwner = decision.input == .replayAuthorized ? .ordinaryDelivery : .recovery
+        guard token == operation, let disposition = currentInputDisposition, inputOwner == .transaction else {
+            return nil
+        }
+        inputOwner = disposition == .replayAuthorized ? .ordinaryDelivery : .recovery
         return ConversionSafetyInputClaim(operation: operation, owner: inputOwner)
     }
 
@@ -143,6 +242,7 @@ public final class ConversionSafetyLedger {
         lastOrdinal += 1
         let submission = ConversionSafetySubmissionToken(operation: operation, ordinal: lastOrdinal)
         entries[submission] = ConversionSafetyEntry(kind: kind)
+        profile?.invalidate()
         if kind.changesEditor { invalidateCleanup() }
         return submission
     }
@@ -167,6 +267,7 @@ private struct ConversionSafetyEntry {
     var admitted = false
     var unknown = false
     var resolution: Resolution?
+    var observedUnderProfile = false
 
     mutating func record(_ observation: ConversionSafetySubmissionObservation) -> Bool {
         switch observation {
@@ -198,7 +299,7 @@ private struct ConversionSafetyEntry {
     }
 
     private mutating func recordPrevention() -> Bool {
-        guard !admitted, resolution == nil else { return false }
+        guard !admitted, resolution == nil, !observedUnderProfile else { return false }
         resolution = .preventedBeforeAdmission
         return true
     }

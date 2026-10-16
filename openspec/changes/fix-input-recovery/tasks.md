@@ -19,6 +19,15 @@ TextEdit с отдельным `observedUnderProfile` и sticky fault. Для 2.
 setter после ошибки и невозможность поздним readback вернуть receipt/replay.
 Решение не закрывает задачу и не переносит допуск на clipboard/Unicode/другие приложения.
 
+Компонентный срез 16.10.2026, 17:03:33 МСК: прямой AX B использует отдельное
+профильное evidence, sticky fault и bounded snapshot до 65536 UTF-16 units.
+Tracked Converter связывает один ledger с внешним app-owner, запрещает legacy fallback
+при отказе factory и выдаёт receipt/звук только после принятия обычной очереди.
+Отказ transport до claim оставляет единственный recovery claim; отказ после claim
+не создаёт повторной отправки. Независимые review CLEAN; полный build/test —
+877 тестов, 0 failures/skipped, `.build/input-recovery-profile-{build,test}.log`.
+Production factory/transport не подключены; эти проверки не закрывают 2.1, 3.1 или 4.2.
+
 - [ ] 2.1 Перевести прямой AX-конвертер на журнал мутации и структурированный cleanup, не ослабляя проверки текста, диапазона, identity и разрешений. Проверка: тесты setter success/error, позднего изменения и постоянно недоступного readback различают отсутствие мутации и неизвестное восстановление; успешный AX и точный undo сохраняются.
 - [ ] 2.2 Перевести clipboard-конвертер с AX и native selection на тот же контракт, сохранив независимое владение clipboard. Проверка: обе production-регрессии `select → missing state → Paste=0` сохраняют удержанные события в recovery вместо опасного replay; оригинальный clipboard восстановлен только при своём changeCount, более новое копирование не затирается.
 - [ ] 2.3 Подключить disposition к DEBUG Unicode, сохранив read boundaries, packet policy, inverse preflight и запрет повторной записи. Проверка: persistent count=999, частичный/ignored batch, ignored Right, cancellation до/после Down и exact undo не скрывают неизвестный cleanup; healthy control остаётся успешным, default Unicode не включается.

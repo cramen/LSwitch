@@ -50,8 +50,8 @@ final class RecoveryOperation {
 
     /// Finish остаётся явным решением владельца. Повторный rejected adopt использует тот же единственный claim.
     func adopt(in coordinator: RecoveryCoordinator, reason: RecoveryReason) -> RecoveryOperationAdoption {
-        guard let decision = ledger.decision else { return .awaitingDecision }
-        guard decision.input == .recoveryRequired else { return .ordinaryDeliveryUnavailable }
+        guard ledger.decision != nil else { return .awaitingDecision }
+        guard ledger.currentInputDisposition == .recoveryRequired else { return .ordinaryDeliveryUnavailable }
         if recoveryClaim == nil { recoveryClaim = ledger.claimInput(operation: ledger.operation) }
         guard let recoveryClaim else { return .rejected(.wrongBinding) }
         return capturePort.adopt(in: coordinator, claim: recoveryClaim, reason: reason)

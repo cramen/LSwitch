@@ -12,18 +12,25 @@ struct AXConversionExecution {
 final class AXMutationSafety {
     let request: ConversionRequest
     private let receiverContract: AXReceiverContract?
+    private let profile: AXObservationProfile?
     private var binding: AXBoundReceiverContract?
     private var pending: [ConversionSafetySubmissionToken: AXWriteReply] = [:]
     private(set) var attempted = false
     private(set) var cleanup: ConversionSafetyCleanupEvidence = .noOwnedMutation
 
-    init(request: ConversionRequest, receiverContract: AXReceiverContract?) {
+    init(request: ConversionRequest, receiverContract: AXReceiverContract?, profile: AXObservationProfile? = nil) {
         self.request = request
         self.receiverContract = receiverContract
+        self.profile = profile
     }
 
+    var isProfileMode: Bool { request.safetyLedger?.profileBinding != nil }
+
     func bind(to element: AXUIElement) -> Bool {
-        guard let ledger = request.safetyLedger else { return true }
+        guard let ledger = request.safetyLedger else { return profile == nil }
+        if isProfileMode {
+            return profile?.bind(to: element, ledger: ledger, isValid: request.isValid) == true
+        }
         guard let binding = receiverContract?.bind(element, ledger.operation),
               binding.isValid(for: element, operation: ledger.operation) else { return false }
         self.binding = binding
@@ -56,8 +63,9 @@ final class AXMutationSafety {
     }
 
     /// Полный snapshot — вход принятого receiver-контракта, но не самостоятельное доказательство completion.
-    func requireCompletion(_ observation: AXWriteObservation) -> Bool {
+    func requireCompletion(_ observation: AXWriteObservation, expected: AXProfileExpectedState? = nil) -> Bool {
         guard request.safetyLedger != nil else { return true }
+        if isProfileMode { return acceptProfileStep(observation, expected: expected) }
         resolve(observation)
         guard pending.isEmpty else { markUnknown(); return false }
         return request.safetyLedger?.encounteredUnknown == false
@@ -73,10 +81,14 @@ final class AXMutationSafety {
         markUnknown()
         guard let observation = ledger.beginCleanupObservation(operation: ledger.operation) else {
             cleanup = .recoveryUnconfirmed
+            failProfile(.cleanupUnconfirmed)
             return cleanup
         }
         if evidence == .recoveredObserved, !validateFresh() { cleanup = .recoveryUnconfirmed }
-        if !ledger.recordCleanup(cleanup, observation: observation) { cleanup = .recoveryUnconfirmed }
+        if !ledger.recordCleanup(cleanup, observation: observation) {
+            cleanup = .recoveryUnconfirmed
+            failProfile(.cleanupUnconfirmed)
+        }
         return cleanup
     }
 
@@ -85,8 +97,40 @@ final class AXMutationSafety {
         if let ledger = request.safetyLedger {
             if ledger.recordedCleanup == nil { recordCleanup(cleanup, validateFresh: { false }) }
             // Чужое более позднее наблюдение не повышает отвергнутый результат этой проверки.
-            if ledger.recordedCleanup != cleanup { cleanup = .recoveryUnconfirmed }
+            if ledger.recordedCleanup != cleanup {
+                cleanup = .recoveryUnconfirmed
+                failProfile(.cleanupUnconfirmed)
+            }
         }
+    }
+
+    /// Каждый отказ B делает cleanup read-only, даже если более позднее чтение снова совпало.
+    func failProfile(_ reason: ConversionSafetyProfileFault) {
+        guard isProfileMode, let ledger = request.safetyLedger else { return }
+        ledger.recordProfileFault(reason, operation: ledger.operation)
+    }
+
+    func profileRead(_ expected: AXProfileExpectedState?) -> AXProfileSnapshot? {
+        guard let ledger = request.safetyLedger, let profile else {
+            failProfile(.preparationFailed)
+            return nil
+        }
+        return profile.read(expected: expected, ledger: ledger)
+    }
+
+    func observeProfileFinal(_ expected: AXProfileExpectedState) -> Bool {
+        guard isProfileMode else { return true }
+        guard let ledger = request.safetyLedger, let profile else { return false }
+        return profile.observe(step: .finalState, reply: nil, expected: expected, ledger: ledger)
+    }
+
+    var permitsReceipt: Bool {
+        guard let ledger = request.safetyLedger else { return true }
+        guard ledger.decision == nil, !ledger.encounteredUnknown, !ledger.hasOutstandingKeyDebt else { return false }
+        if isProfileMode {
+            return !ledger.hasProfileFault && !ledger.hasUnacceptedSubmissions && ledger.hasObservedProfileFinalState
+        }
+        return !ledger.hasUnresolvedSubmissions
     }
 
     func textMatches(_ lhs: String?, _ rhs: String) -> Bool {
@@ -113,9 +157,9 @@ final class AXMutationSafety {
         _ prepared: AXPreparedWrite, kind: ConversionSafetySubmissionKind,
         in element: AXUIElement, isValid: () -> Bool
     ) -> Bool {
-        guard let ledger = request.safetyLedger, let binding else { return false }
+        guard let ledger = request.safetyLedger else { return false }
         let reply = prepared.submit {
-            guard isValid(), binding.isValid(for: element, operation: ledger.operation),
+            guard isValid(), self.hasCurrentBinding(element, ledger: ledger),
                   kind.isCleanup || !Task.isCancelled else { return nil }
             let token = kind == .restoreSelection
                 ? ledger.willSubmitCleanup(kind, operation: ledger.operation)
@@ -133,6 +177,32 @@ final class AXMutationSafety {
     private func markAttempt() {
         attempted = true
         cleanup = .recoveryUnconfirmed
+    }
+
+    private func hasCurrentBinding(_ element: AXUIElement, ledger: ConversionSafetyLedger) -> Bool {
+        if isProfileMode { return profile?.isCurrent(ledger: ledger) == true }
+        return binding?.isValid(for: element, operation: ledger.operation) == true
+    }
+
+    private func acceptProfileStep(_ observation: AXWriteObservation, expected: AXProfileExpectedState?) -> Bool {
+        guard let ledger = request.safetyLedger, let profile, let expected else {
+            failProfile(.snapshotUnavailable)
+            return false
+        }
+        let step: ConversionSafetyProfileStep
+        switch observation {
+        case .selectedRangeSettled: step = .selection
+        case .replacementObserved: step = .text
+        case .finalStateSettled, .cleanupSettled: step = .restoreSelection
+        }
+        for (token, reply) in pending.sorted(by: { $0.key.ordinal < $1.key.ordinal }) {
+            guard profile.observe(step: step, reply: reply, expected: expected, ledger: ledger) else {
+                markUnknown()
+                return false
+            }
+            pending.removeValue(forKey: token)
+        }
+        return pending.isEmpty && !ledger.hasProfileFault && !ledger.encounteredUnknown
     }
 
     private func resolve(_ observation: AXWriteObservation) {

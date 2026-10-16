@@ -38,7 +38,7 @@ public final class ConversionDiagnostics {
 
     public enum Completion: String, Sendable {
         case converted, undone, partiallyConverted, partiallyUndone
-        case blockedByRules, blockedBySafety, unsupportedLayout, busy, failed, skipped
+        case blockedByRules, blockedBySafety, unsupportedLayout, busy, failed, skipped, recoveryRequired
     }
 
     public enum ClockOrigin: String, Sendable { case rawEvent, missing, invalid }
@@ -184,6 +184,7 @@ public final class ConversionDiagnostics {
         case .unsupportedLayout: completion = .unsupportedLayout
         case .busy: completion = .busy
         case .failed: completion = .failed
+        case .recoveryRequired: completion = .recoveryRequired
         }
         complete(completion)
     }

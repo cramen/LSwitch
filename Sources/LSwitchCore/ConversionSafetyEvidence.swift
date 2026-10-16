@@ -7,6 +7,11 @@ public enum ConversionSafetyTextEvidence: Equatable, Sendable {
     case unknown
 }
 
+/// Основание результата явно отделено от факта обработки команды получателем.
+public enum ConversionSafetyVerificationBasis: Equatable, Sendable {
+    case unconfirmed, receiverCompleted, observedUnderProfile
+}
+
 public enum ConversionSafetyCleanupEvidence: Equatable, Sendable {
     case noOwnedMutation
     case recoveredObserved
@@ -85,6 +90,7 @@ public struct ConversionSafetyDecision: Equatable, Sendable {
     public let input: ConversionSafetyInputDisposition
     /// Разрешение публиковать подтверждённую замену не следует из разрешения доставить ввод.
     public let permitsConfirmedResult: Bool
+    public let verificationBasis: ConversionSafetyVerificationBasis
 }
 
 /// Выдаётся одному потребителю; фактическое перемещение событий выполняет внешний владелец очереди.
