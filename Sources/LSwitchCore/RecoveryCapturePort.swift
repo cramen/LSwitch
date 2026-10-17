@@ -5,6 +5,7 @@ import Foundation
 /// Все переходы сериализованы: port → admission → buffer. Guard вызывается только после освобождения admission.
 final class RecoveryCapturePort: @unchecked Sendable {
     let scope: RecoveryCaptureScope
+    let holdDeadline: UInt64
     private let buffer: InputEventBuffer
     private let admission: PreparedRecoveryAdmission
     private let handover: PreparedRecoveryHandover
@@ -18,9 +19,10 @@ final class RecoveryCapturePort: @unchecked Sendable {
 
     init(
         scope: RecoveryCaptureScope, buffer: InputEventBuffer,
-        admission: PreparedRecoveryAdmission, handover: PreparedRecoveryHandover
+        admission: PreparedRecoveryAdmission, handover: PreparedRecoveryHandover, holdDeadline: UInt64
     ) {
         self.scope = scope
+        self.holdDeadline = holdDeadline
         self.buffer = buffer
         self.admission = admission
         self.handover = handover

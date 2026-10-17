@@ -157,7 +157,7 @@ final class EventProcessingLeaseState: @unchecked Sendable {
         guard current.cursor < current.events.count else { self.current = nil; return .finished(.delivered) }
         let raw = current.events[current.cursor]
         current.cursor += 1
-        return .event(correction?.corrected(raw) ?? raw)
+        return .event(correction?.correctedTracked(raw) ?? raw)
     }
 
     var metadata: EventProcessingMetadata {

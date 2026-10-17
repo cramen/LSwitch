@@ -20,6 +20,7 @@ final class RecoveryIsolationReceiverView: NSTextView {
     var matrixLocal: [String: Int] { matrix.local }
     var matrixDispatch: [String: Int] { matrix.dispatched }
     private(set) var matrixShortcut: [String: Bool] = [:]
+    private(set) var ordinaryWakeReleaseObserved = false
 
     func prepareFixture() {
         isRichText = false
@@ -77,6 +78,16 @@ final class RecoveryIsolationReceiverView: NSTextView {
         return selectedRange() == NSRange(location: 4, length: 0)
     }
 
+    var ordinaryContinuationTextMatches: Bool {
+        guard !foreignInput, !overflow else { return false }
+        return string.utf16.elementsEqual("keptx".utf16)
+    }
+
+    var ordinaryContinuationSelectionMatches: Bool {
+        guard !foreignInput, !overflow else { return false }
+        return selectedRange() == NSRange(location: 5, length: 0)
+    }
+
     /// Строки читаются лишь у первого exact known-parent Cmd+A и сразу сводятся к булевым сравнениям.
     func permitsLocalEvent(_ event: NSEvent) -> Bool {
         if matrixArmed {
@@ -104,8 +115,18 @@ final class RecoveryIsolationReceiverView: NSTextView {
 
     override func keyUp(with event: NSEvent) {
         guard observe(event) else { return }
+        observeOrdinaryWakeRelease(event)
         super.keyUp(with: event)
         finishOverflowIfNeeded()
+    }
+
+    /// Факт обычного AppKit keyUp, а не одного label; payload события не читается.
+    private func observeOrdinaryWakeRelease(_ event: NSEvent) {
+        guard !matrixArmed, event.type == .keyUp, identify(event) == .challengeRelease,
+              let native = event.cgEvent, native.type == .keyUp,
+              native.getIntegerValueField(.keyboardEventKeycode) == 0,
+              native.flags.subtracting(.maskNonCoalesced).isEmpty else { return }
+        ordinaryWakeReleaseObserved = true
     }
 
     override func didChangeText() {

@@ -13,8 +13,9 @@ enum RecoveryIsolationMatrixChecks {
         try validWireAndDefaults()
         try invalidMatrixWire()
         try editorMetadata()
+        try ordinaryContinuationMetadata()
         try armRequestHasNoPayload()
-        print("RecoveryIsolationMatrixChecks: 6 groups passed; no UI/events/clipboard")
+        print("RecoveryIsolationMatrixChecks: 7 groups passed; no UI/events/clipboard")
     }
 
     static func require(_ value: Bool, _ name: String) throws {
@@ -145,6 +146,47 @@ enum RecoveryIsolationMatrixChecks {
          "fixtureTextUnchanged": true, "fixtureSelectionUnchanged": false, "controlTextMatches": false,
          "controlSelectionMatches": false, "received": [], "changeCount": 0, "foreignInput": false,
          "overflow": false, "active": true, "focused": true]
+    }
+
+    static func ordinaryContinuationMetadata() throws {
+        let old = try decode(envelope())
+        try require(!old.ordinaryContinuationTextMatches && !old.ordinaryContinuationSelectionMatches
+                    && !old.ordinaryWakeReleaseObserved,
+                    "missing continuation fields default false")
+        var fields = envelope()
+        fields["ordinaryContinuationTextMatches"] = true
+        fields["ordinaryContinuationSelectionMatches"] = false
+        fields["ordinaryWakeReleaseObserved"] = true
+        let first = try decode(fields)
+        try require(first.ordinaryContinuationTextMatches && !first.ordinaryContinuationSelectionMatches
+                    && first.ordinaryWakeReleaseObserved,
+                    "independent exact-state booleans")
+        fields["ordinaryContinuationTextMatches"] = false
+        fields["ordinaryContinuationSelectionMatches"] = true
+        let second = try decode(fields)
+        try require(!second.ordinaryContinuationTextMatches && second.ordinaryContinuationSelectionMatches,
+                    "selection does not imply text match")
+        fields["ordinaryContinuationSelectionMatches"] = false
+        fields["ordinaryWakeReleaseObserved"] = false
+        fields["sequence"] = RecoveryIsolationWire.maximumRequests
+        fields["received"] = Array(repeating: "challengeRelease", count: RecoveryIsolationWire.maximumObservations)
+        fields["changeCount"] = 256
+        fields["windowTitle"] = "LSwitch Isolation Receiver \(nonce)"
+        fields["windowCleanupCompleted"] = true
+        fields["reason"] = "observation_overflow"
+        try require(try requireFrame(fields).count <= RecoveryIsolationWire.maximumReplyBytes,
+                    "bounded ordinary continuation frame")
+        _ = try decode(fields)
+        let invalidValues: [Any] = ["true", 0, 1, [String](), ["payload": "forbidden"]]
+        let booleanFields = ["ordinaryContinuationTextMatches", "ordinaryContinuationSelectionMatches",
+                             "ordinaryWakeReleaseObserved"]
+        for field in booleanFields {
+            for invalid in invalidValues {
+                var malformed = envelope()
+                malformed[field] = invalid
+                try require(rejected(malformed), "continuation fields require booleans")
+            }
+        }
     }
 
     static func requireFrame(_ fields: [String: Any]) throws -> Data {

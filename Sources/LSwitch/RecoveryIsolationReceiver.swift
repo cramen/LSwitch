@@ -128,17 +128,20 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             selected = true
             focusFixture()
             reply("selected", sequence: request.sequence)
-        case .armEventMatrix:
-            guard configured, !selected, editor.armEventMatrix() else { return finish("protocol") }
-            installMatrixMenu()
-            scheduleDeadline(maximumLifetime: 600)
-            focusFixture()
-            reply("matrix_armed", sequence: request.sequence)
+        case .armEventMatrix: armMatrix(editor, sequence: request.sequence)
         case .snapshot:
             reply("snapshot", sequence: request.sequence)
         case .quit:
             finish("quit")
         }
+    }
+
+    private func armMatrix(_ editor: RecoveryIsolationReceiverView, sequence: Int) {
+        guard configured, !selected, editor.armEventMatrix() else { return finish("protocol") }
+        installMatrixMenu()
+        scheduleDeadline(maximumLifetime: 600)
+        focusFixture()
+        reply("matrix_armed", sequence: sequence)
     }
 
     private func focusFixture() {
@@ -178,6 +181,10 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             if !editor.matrixDispatch.isEmpty { result["matrixDispatch"] = editor.matrixDispatch }
             if !editor.matrixShortcut.isEmpty { result["matrixShortcut"] = editor.matrixShortcut }
             if let state = matrixEditorMetadata() { result["matrixEditor"] = state }
+        } else {
+            result["ordinaryContinuationTextMatches"] = editor?.ordinaryContinuationTextMatches ?? false
+            result["ordinaryContinuationSelectionMatches"] = editor?.ordinaryContinuationSelectionMatches ?? false
+            result["ordinaryWakeReleaseObserved"] = editor?.ordinaryWakeReleaseObserved ?? false
         }
         return result
     }

@@ -19,13 +19,19 @@ enum StartupCommands {
         }
         if arguments.contains("--verify-resources") { return verifyResources() }
         if arguments.contains("--probe") { Probe.run() }
+        if let status = runRecoveryCommand(arguments: arguments) { return status }
+        return AcceptanceProbe.runIfRequested(arguments: arguments)
+    }
+
+    private static func runRecoveryCommand(arguments: [String]) -> Int32? {
         if let status = RecoveryIsolationReceiver.runIfRequested(arguments: arguments) { return status }
+        if let status = RecoveryOrdinaryProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryEventMatrixProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryIsolationControl.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryIsolationProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryWindowPreview.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryReceiverProbe.runIfRequested(arguments: arguments) { return status }
-        return AcceptanceProbe.runIfRequested(arguments: arguments)
+        return nil
     }
 
     private static func verifyResources() -> Int32 {

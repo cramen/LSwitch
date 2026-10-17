@@ -11,23 +11,17 @@ public enum RecipientEventKind: String, CaseIterable, Sendable {
     case scroll
 
     public init?(eventType: CGEventType) {
-        switch eventType {
-        case .keyDown: self = .keyDown
-        case .keyUp: self = .keyRelease
-        case .flagsChanged: self = .modifierChange
-        case .leftMouseDown: self = .leftMouseDown
-        case .leftMouseUp: self = .leftMouseRelease
-        case .leftMouseDragged: self = .leftMouseDrag
-        case .rightMouseDown: self = .rightMouseDown
-        case .rightMouseUp: self = .rightMouseRelease
-        case .rightMouseDragged: self = .rightMouseDrag
-        case .otherMouseDown: self = .otherMouseDown
-        case .otherMouseUp: self = .otherMouseRelease
-        case .otherMouseDragged: self = .otherMouseDrag
-        case .scrollWheel: self = .scroll
-        default: return nil
-        }
+        guard let kind = Self.typeMapping[eventType] else { return nil }
+        self = kind
     }
+
+    private static let typeMapping: [CGEventType: RecipientEventKind] = [
+        .keyDown: .keyDown, .keyUp: .keyRelease, .flagsChanged: .modifierChange,
+        .leftMouseDown: .leftMouseDown, .leftMouseUp: .leftMouseRelease, .leftMouseDragged: .leftMouseDrag,
+        .rightMouseDown: .rightMouseDown, .rightMouseUp: .rightMouseRelease, .rightMouseDragged: .rightMouseDrag,
+        .otherMouseDown: .otherMouseDown, .otherMouseUp: .otherMouseRelease, .otherMouseDragged: .otherMouseDrag,
+        .scrollWheel: .scroll
+    ]
 
     static let eventTypes: [CGEventType] = [
         .keyDown, .keyUp, .flagsChanged,
@@ -58,26 +52,25 @@ public enum RecipientEventKind: String, CaseIterable, Sendable {
 
 enum RecipientModifierChange {
     private static let metadataMask: CGEventFlags = [.maskNumericPad, .maskNonCoalesced]
+    // Device-биты соответствуют NX_DEVICE*KEYMASK из SDK IOLLEvent.h и тоже обязаны сняться.
+    private static let changedMasks: [Int64: CGEventFlags] = [
+        54: CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x10),
+        55: CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x08),
+        56: CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | 0x02),
+        60: CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | 0x04),
+        57: CGEventFlags(rawValue: CGEventFlags.maskAlphaShift.rawValue | 0x0100_0080),
+        58: CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x20),
+        61: CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x40),
+        59: CGEventFlags(rawValue: CGEventFlags.maskControl.rawValue | 0x01),
+        62: CGEventFlags(rawValue: CGEventFlags.maskControl.rawValue | 0x2000),
+        63: .maskSecondaryFn
+    ]
 
     static func tracked(_ flags: CGEventFlags) -> CGEventFlags { flags.subtracting(metadataMask) }
 
     /// Generic Shift остаётся включённым при отпускании одной стороны: такой случай не считаем release.
     static func isClearing(keyCode: Int64, flags: CGEventFlags, forwarded: CGEventFlags) -> Bool {
-        // Device-биты соответствуют NX_DEVICE*KEYMASK из SDK IOLLEvent.h и тоже обязаны сняться.
-        let changed: CGEventFlags
-        switch keyCode {
-        case 54: changed = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x10)
-        case 55: changed = CGEventFlags(rawValue: CGEventFlags.maskCommand.rawValue | 0x08)
-        case 56: changed = CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | 0x02)
-        case 60: changed = CGEventFlags(rawValue: CGEventFlags.maskShift.rawValue | 0x04)
-        case 57: changed = CGEventFlags(rawValue: CGEventFlags.maskAlphaShift.rawValue | 0x0100_0080)
-        case 58: changed = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x20)
-        case 61: changed = CGEventFlags(rawValue: CGEventFlags.maskAlternate.rawValue | 0x40)
-        case 59: changed = CGEventFlags(rawValue: CGEventFlags.maskControl.rawValue | 0x01)
-        case 62: changed = CGEventFlags(rawValue: CGEventFlags.maskControl.rawValue | 0x2000)
-        case 63: changed = .maskSecondaryFn
-        default: return false
-        }
+        guard let changed = changedMasks[keyCode] else { return false }
         let current = tracked(flags)
         return current.isDisjoint(with: changed) && current.subtracting(tracked(forwarded)).isEmpty
     }

@@ -63,6 +63,27 @@ final class QueuedInputCorrectionTests: XCTestCase {
         XCTAssertEqual(corrected.modifierFlags, CGEventFlags.maskShift.rawValue)
     }
 
+    func testTrackedDeviceOnlyShortcutAndUnknownBitsArePreserved() {
+        let bits: [UInt64] = [0x01, 0x08, 0x10, 0x20, 0x40, 0x2000, 0x8000, 0x2000_0000, 1 << 60]
+        for bit in bits {
+            let original = event("Ц", modifiers: CGEventFlags(rawValue: bit))
+            XCTAssertEqual(russianToEnglish.correctedTracked(original), original)
+        }
+        for bit: UInt64 in [0x02, 0x04, 0x0100_0080] {
+            let original = event("Ц", modifiers: CGEventFlags(rawValue: bit))
+            XCTAssertEqual(russianToEnglish.correctedTracked(original).characters, "W")
+        }
+    }
+
+    func testLegacyUnknownFlagsKeepPreviousGenericModifierBehavior() {
+        let original = event("ц", modifiers: CGEventFlags(rawValue: 0x2000_0000))
+        let corrected = russianToEnglish.corrected(original)
+        XCTAssertEqual(corrected.characters, "w")
+        XCTAssertEqual(corrected.modifierFlags, original.modifierFlags)
+        XCTAssertEqual(corrected.timestamp, original.timestamp)
+        XCTAssertEqual(russianToEnglish.correctedTracked(original), original)
+    }
+
     func testBothDirectionsUseExplicitPunctuationMapping() {
         let englishToRussian = QueuedInputCorrection(
             from: .english, to: .russian, startedAt: 100, completedAt: 200
@@ -91,6 +112,8 @@ final class QueuedInputCorrectionTests: XCTestCase {
         let tap = EventTapCore { _ in XCTFail("Проверка не должна доставлять события в обработчик") }
         let source = CGEventSource(stateID: .hidSystemState)
         let keyboard = try XCTUnwrap(CGEvent(keyboardEventSource: source, virtualKey: 13, keyDown: true))
+        // Исследуется unmodified input, а не неявное текущее состояние физической клавиатуры машины.
+        keyboard.flags = []
         let startedAt = DispatchTime.now().uptimeNanoseconds
         keyboard.timestamp = startedAt
         let original = Array("ц".utf16)

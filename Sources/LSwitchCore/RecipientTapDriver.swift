@@ -33,6 +33,9 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
     public var permitsMutation: Bool { state.permitsMutation }
     public var snapshot: RecipientTapDriverSnapshot { state.snapshot }
 
+    /// Только создание ещё не опубликованного admission/hold; не право чтения или мутации редактора.
+    var permitsCaptureReservation: Bool { state.canArmProtection || state.permitsMutation }
+
     @MainActor
     @discardableResult
     public func refreshProtection() -> Bool {
@@ -72,6 +75,40 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
     func bindRecipientInput(router: RecoveryCaptureRouter) -> Bool {
         guard !Task.isCancelled, state.permitsMutation else { return false }
         return state.captureEndpoint.bindRecipientInput(router: router, scope: bridge.capturedScope)
+    }
+
+    /// Внешний app-owner уже зарегистрировал Session. Возврат true предшествует первой мутации редактора.
+    @MainActor
+    func armRecipientCapture(_ capture: RecipientOrdinaryCapture) async -> Bool {
+        guard !Task.isCancelled, capture.scope.binding.scope == bridge.capturedScope,
+              worker.refreshHealth(), let activation = bridge.prepareActivation() else { return false }
+        let request = RecipientCaptureArming(state: state, capture: capture, activation: activation)
+        let result = await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { continuation in
+                request.register(continuation)
+                if !worker.enqueue({ request.run() }) { request.cancel() }
+                DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(250)) {
+                    request.expireIfPending()
+                }
+            }
+        }, onCancel: { request.cancel() })
+        guard !Task.isCancelled else { request.cancel(); return false }
+        return result && state.permitsMutation
+    }
+
+    /// Подготовка не claim-ит очередь и не отправляет marker. Diagnostic значение выделяется самим fixture заранее.
+    @MainActor
+    func prepareOrdinaryFlush(
+        capture: RecipientOrdinaryCapture, deadline: UInt64, diagnosticMarker: Int64? = nil
+    ) -> RecipientOrdinaryFlush? {
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard !Task.isCancelled, deadline > now, deadline - now <= 400_000_000,
+              capture.scope.binding.scope == bridge.capturedScope, state.permitsMutation,
+              let marker = RecipientOrdinaryMarker(sourcePID: bridge.senderProcessID,
+                                                   diagnosticValue: diagnosticMarker) else { return nil }
+        let flush = RecipientOrdinaryFlush(capture: capture, state: state, marker: marker,
+                                          timing: .init(deadline: deadline))
+        return state.installOrdinaryFlush(flush) ? flush : nil
     }
 
     public func closeGeneration() { bridge.closeGeneration() }

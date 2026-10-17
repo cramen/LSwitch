@@ -258,6 +258,12 @@ cancel/deadline/reentry, lifetime, foreign/reused proof и rejected adoption.
 
 #### D2.5. DEBUG recipient flush и атомарная публикация capture
 
+Обычный `QueuedInputCorrection.corrected` сохраняет прежнюю политику Cmd/Ctrl/Option.
+Строгая проверка новых native-пакетов отделена в `correctedTracked`: неизвестные flags
+в интервале коррекции запрещают весь batch до первого post. Наблюдаемый у локального
+CGEventSource бит `0x20000000` не получает разрешения по догадке; его профиль требует
+отдельной проверки реального ввода перед включением transport.
+
 App-owner регистрирует Session до запуска асинхронного arm. Один блок того же worker
 run loop публикует recipient endpoint и активирует gate; callbacks не могут наблюдать
 промежуток «gate protected, endpoint ещё отсутствует». MainActor ждёт готовность без
@@ -273,12 +279,31 @@ Diagnostic fixture может заранее передать свою уник�
 tombstone и weak transport; поздний или неправильный own marker подавляется даже после
 обычного завершения и освобождения владельца.
 
+Перед вызовом postWake фиксируется локальная in-flight reservation. Retention может
+сохранить очередь во время этого вызова, но terminal capsule/result не публикуются до
+его возврата; иначе поздний control мог бы прийти после снятия gate. Callback, пришедший
+раньше возврата postWake, может закончить batch и route transition, но публикация всё
+равно ждёт local quiescence этого вызова. Никакой remote delivery ACK из него не следует.
+Deadline ограничен исходным immutable holdDeadline (begin + 400 мс), а не новым сроком
+от момента commit; свежий preflight также явно expire-ит cached capture lease.
+
 После единственного claim capture остаётся открытым до marker callback. Callback
 закрывает новые route tickets, seal-ит admission и получает локальный quiescence proof,
 после чего port передаёт оригиналы той же OrdinaryInputCustody. Копии, correction и
 CGEventTapPostEvent(proxy) выполняются вне всех внутренних locks. Только полный
 локальный returned-префикс позволяет переключить этот endpoint в normal pass-through
 до возврата callback; это не receiver completion и не renderer ACK.
+После этого принятого перехода unowned pass-through необратим для старого driver:
+stop/health loss не возвращают новый ввод в retired capture tombstone. Собственные
+control/native marker по-прежнему проверяются раньше этого прохода и не оживают.
+
+Если финальный переход endpoint отказал уже после полного returned-префикса,
+ещё не потреблённый успешный terminal proof однократно переносит полный оригинал
+в новый retained proof с причиной routeUnavailable. Scope, seal, ordinary claim,
+transport identity и attempted/returned сохраняются. Перенос и healthy consumption
+взаимоисключаются под одним lock; прежний proof после переноса не завершает доставку
+и не выдаёт originals повторно. Это монотонный отказ после локальной отправки,
+а не второй claim, replay или доказательство недоставки уже отправленных событий.
 
 Retention, deadline, lost/stop и отсутствие proxy не повторяют marker. Worker закрывает
 локальный capture без post и повторяет лишь неблокирующую проверку quiescence. Пока
@@ -359,6 +384,15 @@ UTF-16 decoder детектора слов. Некорректные surrogate �
 остаются отдельными unresolved-записями, без догадок и вычисления конечного текста.
 Пользователь может редактировать локальную копию и вручную копировать её стандартной
 командой. Handover не меняет clipboard, не пишет файл и не исполняет сохранённые команды.
+
+После частичного или полного локального ordinary post recovery сохраняет metadata
+attempted/returned отдельно от payload. Если хотя бы один post был начат, окно уже
+до раскрытия показывает: «Часть сохранённого ввода могла уже попасть в приложение.
+Перед копированием проверьте исходный текст.» Скрытие и повторное открытие не теряют
+предупреждение. Оно не означает подтверждённую доставку; отсутствие attempts также
+не доказывает неизменность редактора. Старые записи без ordinary metadata выглядят
+по-прежнему. Обнуление текущих RAM-счётчиков после удаления не переписывает историю
+попыток доставки; metadata не создаёт payload views и не читает события.
 
 Закрытие окна только скрывает его; запись остаётся доступной из меню. Удаление
 требует явного подтверждения. Автоматического raw replay нет ни в прежний, ни
@@ -626,11 +660,60 @@ activation policy. Он запускает только nonce-bound receiver, н
 Select All вручную не вызывается. Последующее A/B сравнивает принудительный Unicode
 командного CGEvent с нативным Unicode, сохраняя остальные свойства пакетов/маршрут.
 
+Для mouse control после положительного AppKit click устанавливается тот же per-PID
+head/tail driver в prepared phase без activateProtection. Он пропускает события и
+считает их типы; это позволяет отличать реальный проход через tap от локальной
+AppKit доставки, включая Up/drag, которые NSTextView может забрать внутри tracking loop.
+
+Фокус проверяется отдельно от адресного ввода CUA: явные кнопки стенда активируют
+только собственный parent либо проверенный PID+birth child через NSApplication/NSRunningApplication.
+В протокол попадают лишь Bool frontmost/active; возврат activate сам по себе не считается
+успешной сменой фокуса. Поля второго процесса не связаны с capture целевого приёмника.
+
 Для диагностики не сработавшего Cmd+A первый exact known-parent keyDown дополнительно
 даёт только булевы признаки Command, characters=="a" и charactersIgnoringModifiers=="a".
 Строки не сохраняются и не выводятся; чужие события до этих чтений отбрасываются.
 Обычный Select All проходит стандартное Application/Edit menu и responder chain;
 ручной вызов selectAll из keyDown не допускается как замена проверяемого поведения.
+
+#### D7.6. Собственный child и настоящий ordinary proxy flush
+
+Отдельный DEBUG-режим использует существующий подписанный receiver helper и тот же
+bounded nonce/sequence IPC с четырьмя фиксированными marker. Configure/selectFixture
+выполняются до arm и являются только подготовкой fixture; журнал операции не содержит
+собственных изменений редактора. App заранее удерживает diagnostic facade и скрытое
+recovery-окно. Facade владеет одним ledger/coordinator/router/operation/flush; reservation
+использует permitsCaptureReservation, но capture допускается только после atomic worker arm.
+Setup ограничен 10 секундами, исходная hold lease — 400 мс без продления.
+
+Control без системного gate отправляет только challengeRelease: keyUp 0, пустые Unicode
+и flags. Receiver должен наблюдать этот Up обычным AppKit dispatch и подтвердить
+неизменные fixture/selection/changeCount. Отдельный ordinaryWakeReleaseObserved
+проверяет фактический NSEvent keyUp, known label, keyCode 0 и нейтральные flags без
+чтения Unicode; один label не считается доказательством типа. Этот опыт проверяет выбранный wake-control,
+не renderer ACK и не допустимость преобразования произвольного редактора.
+
+Positive удерживает фиксированную пару kept Down/Up: 2 события, 16 UTF-16 байт.
+После no-owned-mutation decision один ordinary claim запускает реальный
+CGEventTapPostEvent(proxy) внутри marker callback. Receiver подтверждает exact kept,
+caret 4, одно изменение и prefixDown/prefixRelease. Затем отдельная пара challengeDown
+с фиксированным x и повторным prefixRelease проверяет новый ordinary input: exact keptx,
+caret 5, два изменения и четыре полученных label. challengeRelease остаётся wake tombstone
+ и не используется для отпускания этой пары. IPC возвращает fixed booleans,
+а также wake-observation bool, но не текст, raw events или команды с произвольным payload.
+В положительном flush wake-observation остаётся false: control не должен достигнуть child.
+
+Negative использует тот же настоящий захваченный prefix, но postWake после claim явно
+отказывает без реального wake post. После локального quiescence полный оригинал принимает
+Coordinator с тем же ordinary claim. Recovery UI по умолчанию показывает только metadata;
+раскрытие и quit используют уже принятые explicit intents. Ошибки/timeout после capture
+не удаляют RAM: сначала handover, затем решение пользователя. При завершении child получает
+EOF и завершается до остановки driver; ни один ошибочный путь не повторяет native delivery.
+
+Перед каждым fixture post проверяются собственные PID+birth, фокус child и modifiers;
+clipboard и AX не используются. Отчёты содержат только counts/bools/enum и fixture-only
+границы. Source/hash manifest и живые запуски выполняются отдельно; production factory
+и глобальный processing lease этим диагностическим режимом не включаются.
 
 ## Risks / Trade-offs
 

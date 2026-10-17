@@ -26,7 +26,8 @@ final class RecoveryOperation {
         let buffer = InputEventBuffer()
         guard let token = buffer.beginHold(at: now), let binding = admission.bindHold(token) else { return nil }
         let port = RecoveryCapturePort(scope: .init(binding: binding, tapIdentifier: tapIdentifier), buffer: buffer,
-                                       admission: admission, handover: handover)
+                                       admission: admission, handover: handover,
+                                       holdDeadline: now + InputEventBuffer.maximumDuration)
         return RecoveryOperation(ledger: ledger, capturePort: port)
     }
 

@@ -4,7 +4,7 @@ import Foundation
 
 public enum RecipientTapDriverLoss: String, Equatable, Sendable {
     case permissionUnavailable, identityChanged, startupFailed, startupTimedOut
-    case tapDisabled, tapUnavailable, peerEOF, observationLimit, eventShapeMismatch, stopped
+    case tapDisabled, tapUnavailable, peerEOF, observationLimit, eventShapeMismatch, stopped, ordinaryDeliveryFailed
 }
 
 public enum RecipientTapDriverObservation: String, Equatable, Sendable {
@@ -62,6 +62,9 @@ final class RecipientTapDriverState: @unchecked Sendable {
     private var eventCaptured = [Int](repeating: 0, count: RecipientEventKind.allCases.count)
     private var truncated = false
     private var observations: [RecipientTapDriverObservation] = []
+    private weak var ordinaryFlush: RecipientOrdinaryFlush?
+    private var ordinaryMarker: RecipientOrdinaryMarker?
+    private var ordinaryPassThrough = false
 
     init(bridge: RecoveryRecipientProbeBridge) { self.bridge = bridge }
 
@@ -131,18 +134,62 @@ final class RecipientTapDriverState: @unchecked Sendable {
         return bridge.commitActivation(activation)
     }
 
+    /// Только один worker block: публикация endpoint не может перемежаться с callback на том же run loop.
+    func publishRecipientCapture(_ capture: RecipientOrdinaryCapture, activation: RecoveryRecipientActivation) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard bridge.ownsActivation(activation), capture.scope.binding.scope == bridge.capturedScope,
+              healthyLocked, mouseButtonsReleased, forwardedButtons.isEmpty,
+              captureEndpoint.bindRecipientInput(router: capture.router, scope: bridge.capturedScope),
+              capture.bindActivation(self) else {
+            activation.cancel()
+            return false
+        }
+        return bridge.commitActivation(activation)
+    }
+
+    func installOrdinaryFlush(_ flush: RecipientOrdinaryFlush) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard healthyLocked, ordinaryMarker == nil, !ordinaryPassThrough,
+              flush.capture.scope.binding.scope == bridge.capturedScope,
+              flush.marker.sourcePID == bridge.senderProcessID,
+              !bridge.owns(senderPID: Int64(flush.marker.sourcePID), marker: flush.marker.value) else { return false }
+        ordinaryFlush = flush
+        ordinaryMarker = flush.marker
+        return true
+    }
+
+    func permitsOrdinaryFlush(_ flush: RecipientOrdinaryFlush) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return ordinaryFlush === flush && !ordinaryPassThrough && healthyLocked && bridge.permitsMutation
+    }
+
+    func completeOrdinaryFlush(_ flush: RecipientOrdinaryFlush, proof: OrdinaryTerminalProof) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard ordinaryFlush === flush, !ordinaryPassThrough, healthyLocked, bridge.permitsMutation,
+              proof.scope == flush.capture.scope, proof.progress.failure == nil,
+              proof.progress.attemptedPosts == proof.progress.totalEvents,
+              proof.progress.returnedPosts == proof.progress.totalEvents,
+              !flush.transport.retentionRequested else { return false }
+        bridge.closeGeneration()
+        ordinaryPassThrough = true
+        return true
+    }
+
     var isProtectionAvailable: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return healthyLocked && bridge.snapshot.protectionAvailable
+        return !ordinaryPassThrough && healthyLocked && bridge.snapshot.protectionAvailable
     }
 
     var permitsMutation: Bool {
         lock.lock()
         defer { lock.unlock() }
         let current = bridge.snapshot
-        return healthyLocked && mouseButtonsReleased && forwardedButtons.isEmpty
-            && current.protectionAvailable && current.phase == "protected"
+        return !ordinaryPassThrough && healthyLocked && current.protectionAvailable && current.phase == "protected"
             && !current.handoverRequested
     }
 
@@ -150,12 +197,15 @@ final class RecipientTapDriverState: @unchecked Sendable {
     func withProtection(_ body: () -> Void) {
         lock.lock()
         defer { lock.unlock() }
-        guard healthyLocked, bridge.snapshot.protectionAvailable else { return }
+        guard !ordinaryPassThrough, healthyLocked, bridge.snapshot.protectionAvailable else { return }
         body()
     }
 
     /// Только явный fixture endpoint может читать payload. Его admission не вызывается под state lock.
-    func observe(type: CGEventType, event: CGEvent, isHead: Bool) -> Bool {
+    func observe(
+        type: CGEventType, event: CGEvent, isHead: Bool, postOrdinary: ((CGEvent) throws -> Void)? = nil
+    ) -> Bool {
+        if isHead, let decision = observeOrdinary(type: type, event: event, post: postOrdinary) { return decision }
         if isHead, captureEndpoint.route(type: type, event: event) == .suppress {
             recordCaptureSuppression(type: type)
             return false
@@ -190,9 +240,8 @@ final class RecipientTapDriverState: @unchecked Sendable {
         defer { lock.unlock() }
         let current = bridge.snapshot
         return .init(workerRunning: running, headEnabled: headEnabled, tailEnabled: tailEnabled,
-                     protectionAvailable: healthyLocked && current.protectionAvailable,
-                     permitsMutation: healthyLocked && mouseButtonsReleased && forwardedButtons.isEmpty
-                        && current.protectionAvailable
+                     protectionAvailable: !ordinaryPassThrough && healthyLocked && current.protectionAvailable,
+                     permitsMutation: healthyLocked && current.protectionAvailable
                         && current.phase == "protected" && !current.handoverRequested,
                      cleanupCompleted: cleaned, loss: loss, headAllowed: headAllowed, headBlocked: headBlocked,
                      tailObserved: tailObserved, disableNotifications: disableNotifications,
@@ -203,7 +252,30 @@ final class RecipientTapDriverState: @unchecked Sendable {
                      observationsTruncated: truncated, observations: observations)
     }
 
+}
+
+extension RecipientTapDriverState {
     private var healthyLocked: Bool { running && headEnabled && tailEnabled && loss == nil && !cleaned }
+
+    /// Тот же marker tombstone остаётся после исчезновения weak owner. Никаких payload reads под state lock.
+    private func observeOrdinary(
+        type: CGEventType, event: CGEvent, post: ((CGEvent) throws -> Void)?
+    ) -> Bool? {
+        lock.lock()
+        let owned = ordinaryMarker?.owns(event) == true
+        let flush = ordinaryFlush
+        // Принятый normal route необратим: teardown старого tap не должен снова поглощать новый ввод.
+        let pass = ordinaryPassThrough
+        lock.unlock()
+        if owned {
+            flush?.receiveWake(type: type, event: event, post: post)
+            return false
+        }
+        guard pass, RecipientEventKind(eventType: type) != nil else { return nil }
+        let ownedNative = bridge.owns(senderPID: event.getIntegerValueField(.eventSourceUnixProcessID),
+                                     marker: event.getIntegerValueField(.eventSourceUserData))
+        return ownedNative ? nil : true
+    }
 
     private func recordCaptureSuppression(type: CGEventType) {
         lock.lock()

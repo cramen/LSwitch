@@ -6,6 +6,17 @@ processing lease и системный transport ещё не включены в
 
 ## Проверенный компонентный срез
 
+Актуальный срез завершил `make build`, **994 теста без failures/skipped** (13:48:29 МСК)
+и **7 protocol-групп**. Логи `.build/input-recovery-native-{build,test,protocol}.log`;
+source manifest `.build/recovery-ordinary-v1-manifest.json`. Включены атомарное
+вооружение capture, настоящий proxy flush с единственным владельцем, удержание после
+частичного отказа, предупреждение о возможной доставке и собственный D7.6 probe.
+Новые UI/native проверки и production wiring в число unit-проверок не включаются.
+
+Срез `a1bbd53` прошёл build/test/protocol в CI, но
+[SwiftLint нашёл 9 нарушений](https://github.com/cramen/LSwitch/actions/runs/39022915562).
+Все девять исправлены в текущих исходниках; итог следующего CI ещё требуется проверить.
+
 Общий `make build` / `make test` завершился 12:44:40 МСК: **954 теста, 0 failures,
 0 skipped**. Дополнительный `make check-recovery-protocol` — 6 групп без UI,
 отправки событий и clipboard. Логи `.build/input-recovery-custody-final-{build,test,protocol}.log`.
@@ -85,6 +96,31 @@ LSwitch. Финального graceful-протокола этого опыта 
 После автоматических опытов он восстановлен. PuntoSwitcher/Caramba не запускались.
 CG mouse emitter сохранён отдельно как неподключённая заготовка; mouse posts не выполнялись.
 
-Открыты: положительный mouse control, реальная обычная передача очереди, focus/order,
+## Мышь и настоящий системный фокус
+
+v7 добавляет head/tail taps и в control: gate ещё не вооружён, события проходят без capture.
+На одном бинарнике проверены left click/drag, right/middle click и scroll в собственном
+NSTextView. В control все события дошли до tail; правый click открыл штатное меню,
+закрытое его AX Cancel. В protected те же 12 mouse-событий заблокированы до tail.
+NSTextView в protected не изменился; в другом собственном процессе обычный ввод прошёл.
+Оба опыта завершены через UI, final reply/EOF/exit=0/cleanup подтверждены.
+Правый и дополнительный drag живым опытом не проверены.
+
+v8 подтвердил фактический цикл receiver → sender → receiver по frontmost/active/focused,
+а не только по результату вызова activate. В sender прошёл тестовый `x`; после возврата
+в receiver left Down/Up по-прежнему заблокированы, текст/selection не изменены.
+Повторный опыт завершён штатно. Первая попытка v8 завершилась защитой fixture:
+неизвестный CUA keyUp не входит в его whitelist; ей не присваивается приёмка.
+
+| Срез | SHA-256 основного executable | SHA-256 receiver |
+|---|---|---|
+| v7 | `9d9287cd286d0530c6b3cd957edfab9b66455637efae9c3bc252c37c347a00a0` | `023d7e7b529bf2c31e1bc9f8a5b63c231f08a6963f63759f584fe0027db7184c` |
+| v8 | `0b8af06a304d20980b5136dca4686c25ee4d5618b29b214dfef45ceb2af698ad` | `eecd8b55d9d69b41c7bcf4311073e496082ad51030f8d6967f48203ef094651e` |
+
+Протоколы: `.build/recovery-event-matrix-v7-mouse-{control,protected}.jsonl`,
+`.build/recovery-event-matrix-v8-focus-protected-repeat.jsonl`; manifests v7/v8.
+Обычный LSwitch восстановлен, clipboard и CG mouse synthesis не использовались.
+
+Открыты: реальная обычная передача очереди, порядок последующего ввода,
 TCC/Secure Input, lifecycle рабочего приложения и включение принятых профилей.
 Ни stage0/1/2, ни bridge, ни задачи 2–4/6 этого change этим срезом не закрываются.

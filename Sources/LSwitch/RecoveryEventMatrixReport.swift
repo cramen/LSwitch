@@ -68,6 +68,10 @@ extension RecoveryEventMatrixController {
             "mode": mode.rawValue, "stage": stage.rawValue, "status": status, "keyboardOnly": keyboardOnly,
             "keyboardRoute": keyboardRoute.rawValue,
             "senderPID": getpid(), "targetPID": peer.processID, "postedKeyboardCount": postedCount,
+            "senderActive": NSApplication.shared.isActive,
+            "senderFrontmost": NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid(),
+            "receiverFrontmost": peer.isRunning
+                && NSWorkspace.shared.frontmostApplication?.processIdentifier == peer.processID,
             "balancingReleasePosts": balancingReleases, "unpostedReleaseDebt": keyboardDebtUnresolved,
             "childEOF": childEOF, "childExit": childExit.map { $0 as Any } ?? NSNull(),
             "childStderrBytes": childStderr, "finalReply": finalReply, "cleanupCompleted": cleanupCompleted,

@@ -11,6 +11,9 @@ struct IsolationChildMessage: Sendable {
     let fixtureSelectionUnchanged: Bool?
     let controlTextMatches: Bool
     let controlSelectionMatches: Bool
+    let ordinaryContinuationTextMatches: Bool
+    let ordinaryContinuationSelectionMatches: Bool
+    let ordinaryWakeReleaseObserved: Bool
     let received: [String]
     let changeCount: Int?
     let foreignInput: Bool
@@ -45,6 +48,9 @@ private struct IsolationChildWireReply: Decodable {
     let fixtureSelectionUnchanged: Bool
     let controlTextMatches: Bool
     let controlSelectionMatches: Bool
+    let ordinaryContinuationTextMatches: Bool?
+    let ordinaryContinuationSelectionMatches: Bool?
+    let ordinaryWakeReleaseObserved: Bool?
     let received: [String]
     let changeCount: Int
     let foreignInput: Bool
@@ -62,6 +68,8 @@ private struct IsolationChildWireReply: Decodable {
         case version = "v"
         case nonce, sequence, kind, pid, senderPID, windowTitle, fixtureTextUnchanged, fixtureSelectionUnchanged
         case controlTextMatches, controlSelectionMatches
+        case ordinaryContinuationTextMatches, ordinaryContinuationSelectionMatches
+        case ordinaryWakeReleaseObserved
         case received, changeCount, foreignInput, overflow, active, focused, reason
         case matrixArmed, matrixLocal, matrixDispatch, matrixShortcut, matrixEditor
     }
@@ -152,16 +160,26 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
               reply.received.allSatisfy({ RecoveryIsolationLabel(rawValue: $0) != nil }), validMatrix(reply) else {
             return nil
         }
-        return .init(
+        let continuationText: Bool = reply.ordinaryContinuationTextMatches ?? false
+        let continuationSelection: Bool = reply.ordinaryContinuationSelectionMatches ?? false
+        let wakeRelease: Bool = reply.ordinaryWakeReleaseObserved ?? false
+        let matrixArmed: Bool = reply.matrixArmed ?? false
+        let matrixLocal: [String: Int] = reply.matrixLocal ?? [:]
+        let matrixDispatch: [String: Int] = reply.matrixDispatch ?? [:]
+        let matrixShortcut: [String: Bool] = reply.matrixShortcut ?? [:]
+        let matrixEditor: [String: Bool] = reply.matrixEditor ?? [:]
+        return IsolationChildMessage(
             sequence: reply.sequence, kind: reply.kind, processID: target, windowTitle: reply.windowTitle,
             fixtureTextUnchanged: reply.fixtureTextUnchanged,
             fixtureSelectionUnchanged: reply.fixtureSelectionUnchanged,
             controlTextMatches: reply.controlTextMatches, controlSelectionMatches: reply.controlSelectionMatches,
+            ordinaryContinuationTextMatches: continuationText,
+            ordinaryContinuationSelectionMatches: continuationSelection,
+            ordinaryWakeReleaseObserved: wakeRelease,
             received: reply.received, changeCount: reply.changeCount, foreignInput: reply.foreignInput,
             overflow: reply.overflow, active: reply.active, focused: reply.focused, reason: reply.reason,
-            matrixArmed: reply.matrixArmed ?? false, matrixLocal: reply.matrixLocal ?? [:],
-            matrixDispatch: reply.matrixDispatch ?? [:], matrixShortcut: reply.matrixShortcut ?? [:],
-            matrixEditor: reply.matrixEditor ?? [:]
+            matrixArmed: matrixArmed, matrixLocal: matrixLocal,
+            matrixDispatch: matrixDispatch, matrixShortcut: matrixShortcut, matrixEditor: matrixEditor
         )
     }
 

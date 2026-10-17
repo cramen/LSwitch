@@ -27,7 +27,7 @@ struct OrdinaryDispatchActions {
     let post: (CGEvent) throws -> Void
 }
 
-fileprivate struct OrdinaryInputBinding {
+private struct OrdinaryInputBinding {
     let scope: RecoveryCaptureScope
     let seal: RecoveryAdmissionSeal
     let claim: ConversionSafetyInputClaim
@@ -166,6 +166,22 @@ final class OrdinaryTerminalProof: @unchecked Sendable {
     var seal: RecoveryAdmissionSeal { binding.seal }
     var claim: ConversionSafetyInputClaim { binding.claim }
     var transportIdentifier: UUID { binding.identifier }
+
+    /// Отказ финального маршрута сохраняет originals с прежним claim, не повторяя dispatch.
+    /// Перенос взаимоисключается с completion; уже потреблённый proof нельзя восстановить.
+    func retainingAfterRouteRefusal() -> OrdinaryTerminalProof? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard progress.failure == nil, let events,
+              progress.attemptedPosts == progress.totalEvents,
+              progress.returnedPosts == progress.totalEvents else { return nil }
+        let retained = OrdinaryTerminalProof(binding: binding, events: events, progress: .init(
+            totalEvents: progress.totalEvents, attemptedPosts: progress.attemptedPosts,
+            returnedPosts: progress.returnedPosts, failure: .routeUnavailable
+        ))
+        self.events = nil
+        return retained
+    }
 
     func takeRetained(seal: RecoveryAdmissionSeal) -> [CGEvent]? {
         lock.lock()

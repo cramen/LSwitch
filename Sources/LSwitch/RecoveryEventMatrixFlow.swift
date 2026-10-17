@@ -48,21 +48,27 @@ extension RecoveryEventMatrixController {
                   let sequence = peer.send(.armEventMatrix) else { return finish("arm_failed") }
             expectedSequence = sequence
             stage = .arming
-        case .arming:
-            guard message.kind == "matrix_armed", message.matrixArmed, message.active, message.focused,
-                  hasChildFocus else { return finish("armed_focus_invalid") }
-            stage = .preparing
-            Task { await prepareGateAndSend() }
-        case .observing, .interactive:
-            guard message.kind == "snapshot", message.matrixArmed else { return finish("snapshot_invalid") }
-            pendingSnapshot = false
-            stage = .interactive
-            status = "interactive_ready"
-            report()
-            if keyboardOnly { finish("keyboard_observation_complete") } else if finishingAfterSnapshot {
-                finish("operator_finished")
-            }
+        case .arming: prepareAfterArmed(message)
+        case .observing, .interactive: observeSnapshot(message)
         case .preparing, .finishing: finish("unexpected_reply")
+        }
+    }
+
+    private func prepareAfterArmed(_ message: IsolationChildMessage) {
+        guard message.kind == "matrix_armed", message.matrixArmed, message.active, message.focused,
+              hasChildFocus else { return finish("armed_focus_invalid") }
+        stage = .preparing
+        Task { await prepareGateAndSend() }
+    }
+
+    private func observeSnapshot(_ message: IsolationChildMessage) {
+        guard message.kind == "snapshot", message.matrixArmed else { return finish("snapshot_invalid") }
+        pendingSnapshot = false
+        stage = .interactive
+        status = "interactive_ready"
+        report()
+        if keyboardOnly { finish("keyboard_observation_complete") } else if finishingAfterSnapshot {
+            finish("operator_finished")
         }
     }
 
@@ -81,13 +87,13 @@ extension RecoveryEventMatrixController {
     }
 
     private func prepareGateAndSend() async {
+        guard let anchor, let driver = RecipientTapDriver(bridge: anchor.bridge) else {
+            return finish("driver_unavailable")
+        }
+        self.driver = driver
+        guard await driver.start(), !finished, hasChildFocus else { return finish("driver_start_failed") }
         if mode != .control {
-            guard let anchor, let driver = RecipientTapDriver(bridge: anchor.bridge) else {
-                return finish("driver_unavailable")
-            }
-            self.driver = driver
-            guard await driver.start(), !finished, hasChildFocus,
-                  driver.activateProtection() else { return finish("prearm_failed") }
+            guard driver.activateProtection() else { return finish("prearm_failed") }
             if mode == .closed { driver.closeGeneration() }
             if mode == .lost { driver.markPeerEOF() }
         }
@@ -111,17 +117,7 @@ extension RecoveryEventMatrixController {
         var modifierDebt = false
         var keyDebt = false
         defer {
-            if keyDebt, hasChildIdentity, events[2].isUnchanged {
-                events[2].event.postToPid(peer.processID)
-                balancingReleases += 1
-                keyDebt = false
-            }
-            if modifierDebt, hasChildIdentity, events[3].isUnchanged {
-                events[3].event.postToPid(peer.processID)
-                balancingReleases += 1
-                modifierDebt = false
-            }
-            keyboardDebtUnresolved = keyDebt || modifierDebt
+            keyboardDebtUnresolved = balanceReleases(events, keyDebt: keyDebt, modifierDebt: modifierDebt)
         }
         for (index, prepared) in events.enumerated() {
             guard hasChildFocus, prepared.isUnchanged else { return false }
@@ -139,6 +135,18 @@ extension RecoveryEventMatrixController {
             }
         }
         return true
+    }
+
+    private func balanceReleases(
+        _ events: [PreparedMatrixKeyboardPacket], keyDebt: Bool, modifierDebt: Bool
+    ) -> Bool {
+        var unposted = false
+        for (index, owed) in [(2, keyDebt), (3, modifierDebt)] where owed {
+            guard hasChildIdentity, events[index].isUnchanged else { unposted = true; continue }
+            events[index].event.postToPid(peer.processID)
+            balancingReleases += 1
+        }
+        return unposted
     }
 
     private func preparedKeyboardControl() -> [PreparedMatrixKeyboardPacket]? {

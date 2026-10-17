@@ -179,14 +179,8 @@ extension Converter {
             inputHeld = false
             isBusy = false
         }
-        let started = revision
-        let startedAt = DispatchTime.now().uptimeNanoseconds
-        guard beginInputHold() else {
-            diagnostics.reject(.holdUnavailable)
-            return .blockedBySafety
-        }
-        inputHeld = true
-        diagnostics.mark(.holdAcquired)
+        let started = revision, startedAt = DispatchTime.now().uptimeNanoseconds
+        guard acquireLegacyHold(diagnostics) else { return .blockedBySafety }
         let cleanup: ContextCheck = { [weak self] in self?.frontmostBundleID() == bundleID && check() }
         let valid = validityCheck(bundleID: bundleID, revision: started, context: check, diagnostics: diagnostics)
         await drainPendingInput()
@@ -198,6 +192,13 @@ extension Converter {
         )
         return await convert(expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
                              operation: operation)
+    }
+
+    private func acquireLegacyHold(_ diagnostics: ConversionDiagnostics) -> Bool {
+        guard beginInputHold() else { diagnostics.reject(.holdUnavailable); return false }
+        inputHeld = true
+        diagnostics.mark(.holdAcquired)
+        return true
     }
 
     private func runTracked(
@@ -322,8 +323,7 @@ extension Converter {
         return .undone
     }
 
-    /// Полный успех требует подтверждения адаптера и текущего источника.
-    /// Уже подходящая раскладка не требует новой команды и не создаёт окно коррекции Unicode.
+    /// Успех требует adapter/readback; подходящий источник не создаёт команду или окно коррекции.
     private func switchAndRecord(
         _ target: Layout, from source: Layout, since startedAt: UInt64, diagnostics: ConversionDiagnostics
     ) -> Bool {

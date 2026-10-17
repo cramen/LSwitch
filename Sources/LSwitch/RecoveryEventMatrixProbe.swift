@@ -61,6 +61,7 @@ final class RecoveryEventMatrixController: NSObject, NSApplicationDelegate, NSWi
     var status = "starting"
     var timer: Timer?
     var window: NSWindow?
+    private var inputField: NSTextField?
 
     init(mode: RecoveryEventMatrixMode, keyboardOnly: Bool, route: MatrixKeyboardRoute) {
         self.mode = mode
@@ -130,8 +131,21 @@ final class RecoveryEventMatrixController: NSObject, NSApplicationDelegate, NSWi
         requestSnapshot()
     }
 
+    @objc private func focusParentWindow() {
+        guard !finished, let window, let inputField else { return }
+        window.makeKeyAndOrderFront(nil)
+        _ = window.makeFirstResponder(inputField)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func focusReceiverWindow() {
+        guard !finished, peer.isRunning, anchor?.targetIsCurrent == true,
+              let receiver = NSRunningApplication(processIdentifier: peer.processID) else { return }
+        _ = receiver.activate(options: [.activateIgnoringOtherApps])
+    }
+
     private func prepareWindow() {
-        let frame = NSRect(x: 80, y: 100, width: 540, height: 210)
+        let frame = NSRect(x: 80, y: 100, width: 540, height: 250)
         let window = NSWindow(contentRect: frame, styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "LSwitch Event Matrix \(mode.rawValue)"
         window.isReleasedWhenClosed = false
@@ -139,14 +153,19 @@ final class RecoveryEventMatrixController: NSObject, NSApplicationDelegate, NSWi
         let content = NSView(frame: NSRect(origin: .zero, size: frame.size))
         let label = NSTextField(wrappingLabelWithString:
             "Собственный тестовый редактор: \(mode.rawValue). Проверяйте мышь только внутри его текстового поля.")
-        label.frame = NSRect(x: 20, y: 145, width: 500, height: 45)
-        let input = NSTextField(frame: NSRect(x: 20, y: 95, width: 500, height: 28))
+        label.frame = NSRect(x: 20, y: 185, width: 500, height: 45)
+        let input = NSTextField(frame: NSRect(x: 20, y: 135, width: 500, height: 28))
         input.placeholderString = "Тест ввода в другом процессе"
+        inputField = input
+        let parentFocus = NSButton(title: "Работать в этом окне", target: self, action: #selector(focusParentWindow))
+        parentFocus.frame = NSRect(x: 20, y: 80, width: 235, height: 36)
+        let childFocus = NSButton(title: "Показать редактор", target: self, action: #selector(focusReceiverWindow))
+        childFocus.frame = NSRect(x: 275, y: 80, width: 245, height: 36)
         let snapshot = NSButton(title: "Снять показания", target: self, action: #selector(requestSnapshot))
         snapshot.frame = NSRect(x: 20, y: 30, width: 190, height: 36)
         let finish = NSButton(title: "Завершить проверку", target: self, action: #selector(requestFinish))
         finish.frame = NSRect(x: 270, y: 30, width: 250, height: 36)
-        for view in [label, input, snapshot, finish] { content.addSubview(view) }
+        for view in [label, input, parentFocus, childFocus, snapshot, finish] { content.addSubview(view) }
         window.contentView = content
         self.window = window
         window.orderFront(nil)

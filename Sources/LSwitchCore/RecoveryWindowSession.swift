@@ -52,7 +52,8 @@ public final class RecoveryWindowSession {
         guard record.isDeleted else { return metadata }
         return .init(
             recordIdentifier: metadata.recordIdentifier, applicationName: metadata.applicationName,
-            counts: .init(events: 0, utf16Bytes: 0), reason: metadata.reason, protection: metadata.protection
+            counts: .init(events: 0, utf16Bytes: 0), reason: metadata.reason, protection: metadata.protection,
+            ordinaryDelivery: metadata.ordinaryDelivery
         )
     }
 

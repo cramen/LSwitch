@@ -151,4 +151,20 @@ final class EventProcessingLeaseTests: XCTestCase {
             XCTAssertTrue(raw.characters.isEmpty)
         }
     }
+
+    func testTrackedLogicalTailPreservesUnknownFlagsWithoutApplyingLegacyCorrection() throws {
+        let state = EventProcessingLeaseState()
+        let lease = try XCTUnwrap(state.begin(scope: EventProcessingTestFixture.scope(), at: 100))
+        XCTAssertTrue(state.arm(lease, at: 100))
+        let event = try EventProcessingTestFixture.event("ц")
+        event.timestamp = 150
+        event.flags = CGEventFlags(rawValue: 0x2000_0000)
+        XCTAssertTrue(state.observe(type: .keyDown, event: event, at: 150))
+        let correction = QueuedInputCorrection(from: .russian, to: .english, startedAt: 100, completedAt: 200)
+        XCTAssertTrue(state.claimFinish(lease, disposition: .delivered(correction), at: 200))
+        guard case .event(let raw) = state.next(lease, at: 200) else { return XCTFail("Потерян logical tail") }
+        XCTAssertEqual(raw.characters, "ц")
+        XCTAssertEqual(raw.modifierFlags, 0x2000_0000)
+        XCTAssertEqual(correction.corrected(raw).characters, "w", "Legacy путь намеренно остаётся прежним")
+    }
 }

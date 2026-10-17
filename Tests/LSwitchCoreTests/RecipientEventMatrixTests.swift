@@ -17,6 +17,17 @@ final class RecipientEventMatrixTests: XCTestCase {
     }
 
     @MainActor
+    func testPhysicalMouseStateAfterActivationDoesNotRevokeCaptureLease() throws {
+        let fixture = try RecipientTapDriverFixture()
+        fixture.state.recordPhysicalButtons(released: false)
+        XCTAssertTrue(fixture.state.permitsMutation)
+        XCTAssertTrue(fixture.state.snapshot.permitsMutation)
+        XCTAssertFalse(fixture.state.snapshot.mouseButtonsReleased)
+        fixture.state.markLost(.tapDisabled)
+        XCTAssertFalse(fixture.state.permitsMutation)
+    }
+
+    @MainActor
     func testProtectedClosedAndLostRejectEveryModifyingFamilyWithoutSubmission() throws {
         for terminal in ["protected", "closed", "lost"] {
             for type in RecipientEventKind.eventTypes where type != .keyUp {

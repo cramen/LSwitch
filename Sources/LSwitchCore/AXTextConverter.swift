@@ -90,14 +90,6 @@ public final class AXTextConverter: ConversionEngine {
         self.observationProfile = observationProfile
     }
 
-    public static func isSecureField(_ element: AXUIElement) -> Bool {
-        SystemAXTextAccess.isSecureField(element)
-    }
-
-    public func focusedElement() -> AXUIElement? {
-        access.focusedElement()
-    }
-
     public func perform(_ request: ConversionRequest) async -> ConversionResult {
         await performWithEvidence(request).result
     }
@@ -387,4 +379,12 @@ public final class AXTextConverter: ConversionEngine {
         logger.info("AX результат=\(label, privacy: .public), причина=\(reason, privacy: .public)")
         return result
     }
+}
+
+extension AXTextConverter {
+    public static func isSecureField(_ element: AXUIElement) -> Bool {
+        SystemAXTextAccess.isSecureField(element)
+    }
+
+    public func focusedElement() -> AXUIElement? { access.focusedElement() }
 }

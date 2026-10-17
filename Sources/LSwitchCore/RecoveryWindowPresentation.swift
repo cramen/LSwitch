@@ -6,7 +6,7 @@ public enum RecoveryWindowProtection: Equatable, Sendable {
 }
 
 public enum RecoveryWindowReason: Equatable, Sendable {
-    case cleanupUnconfirmed, admissionStopped, gateLost, interceptionStopped
+    case cleanupUnconfirmed, admissionStopped, gateLost, interceptionStopped, ordinaryDeliveryUnconfirmed
 }
 
 public struct RecoveryWindowCounts: Equatable, Sendable {
@@ -26,16 +26,19 @@ public struct RecoveryWindowMetadata: Equatable, Sendable {
     public let counts: RecoveryWindowCounts
     public let reason: RecoveryWindowReason
     public let protection: RecoveryWindowProtection
+    public let ordinaryDelivery: OrdinaryDeliveryProgress?
 
     public init(
         recordIdentifier: UUID, applicationName: String, counts: RecoveryWindowCounts,
-        reason: RecoveryWindowReason, protection: RecoveryWindowProtection
+        reason: RecoveryWindowReason, protection: RecoveryWindowProtection,
+        ordinaryDelivery: OrdinaryDeliveryProgress? = nil
     ) {
         self.recordIdentifier = recordIdentifier
         self.applicationName = applicationName
         self.counts = counts
         self.reason = reason
         self.protection = protection
+        self.ordinaryDelivery = ordinaryDelivery
     }
 }
 

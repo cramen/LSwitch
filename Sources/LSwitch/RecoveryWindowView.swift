@@ -75,6 +75,14 @@ final class RecoveryWindowView: NSView {
             "Сохранено событий: \(metadata.counts.events). Объём текстовых данных: \(metadata.counts.utf16Bytes) байт."
         ))
         stack.addArrangedSubview(label("Данные находятся только в памяти и не отправляются автоматически."))
+        if metadata.ordinaryDelivery?.possiblyAlreadyDelivered == true {
+            let warning = label(
+                "Часть сохранённого ввода могла уже попасть в приложение. "
+                    + "Перед копированием проверьте исходный текст."
+            )
+            warning.textColor = .systemOrange
+            stack.addArrangedSubview(warning)
+        }
     }
 
     private func addDisclosure(
@@ -176,6 +184,7 @@ final class RecoveryWindowView: NSView {
         case .admissionStopped: return "Обработка ввода остановлена; уже принятые события сохранены."
         case .gateLost: return "Защита исходного приложения стала недоступна."
         case .interceptionStopped: return "Перехват ввода остановлен; сохранённая запись остаётся доступной."
+        case .ordinaryDeliveryUnconfirmed: return "Не удалось подтвердить завершение доставки сохранённого ввода."
         }
     }
 

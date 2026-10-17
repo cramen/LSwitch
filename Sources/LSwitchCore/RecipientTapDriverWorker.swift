@@ -51,6 +51,17 @@ final class RecipientTapDriverWorker: @unchecked Sendable {
         return finished.wait(timeout: .now() + .milliseconds(250)) == .success
     }
 
+    /// Блок исполняется на том же run loop, что и native callbacks; resource lock уже отпущен.
+    func enqueue(_ body: @escaping @Sendable () -> Void) -> Bool {
+        lock.lock()
+        let current = !stopping && started ? loop : nil
+        lock.unlock()
+        guard let current else { return false }
+        CFRunLoopPerformBlock(current, CFRunLoopMode.defaultMode.rawValue, body)
+        CFRunLoopWakeUp(current)
+        return true
+    }
+
     /// Здесь нет ожидания или post. System calls выполняются после освобождения resource lock.
     func requestStop(_ reason: RecipientTapDriverLoss) {
         lock.lock()
@@ -195,7 +206,10 @@ private func recipientDriverHeadCallback(
 ) -> Unmanaged<CGEvent>? {
     guard let context else { return Unmanaged.passUnretained(event) }
     let state = Unmanaged<RecipientTapDriverState>.fromOpaque(context).takeUnretainedValue()
-    return state.observe(type: type, event: event, isHead: true) ? Unmanaged.passUnretained(event) : nil
+    let allowed = state.observe(type: type, event: event, isHead: true, postOrdinary: { copied in
+        copied.tapPostEvent(proxy)
+    })
+    return allowed ? Unmanaged.passUnretained(event) : nil
 }
 
 private func recipientDriverTailCallback(
