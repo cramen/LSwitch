@@ -17,6 +17,12 @@ source manifest `.build/recovery-ordinary-v1-manifest.json`. Включены а
 [SwiftLint нашёл 9 нарушений](https://github.com/cramen/LSwitch/actions/runs/39022915562).
 Все девять исправлены в текущих исходниках; итог следующего CI ещё требуется проверить.
 
+Срез `d386dcb` снова прошёл build/test/protocol; его
+[CI](https://github.com/cramen/LSwitch/actions/runs/39026409766) нашёл только complexity=12
+в диагностическом retention. Выделен отдельный ordinary-retention helper без изменения
+порядка владения. Изолированный срез повторил build/994 теста/7 protocol-групп;
+лог `.build/recovery-994-lint-check.log`.
+
 Общий `make build` / `make test` завершился 12:44:40 МСК: **954 теста, 0 failures,
 0 skipped**. Дополнительный `make check-recovery-protocol` — 6 групп без UI,
 отправки событий и clipboard. Логи `.build/input-recovery-custody-final-{build,test,protocol}.log`.
@@ -121,6 +127,31 @@ v8 подтвердил фактический цикл receiver → sender → 
 `.build/recovery-event-matrix-v8-focus-protected-repeat.jsonl`; manifests v7/v8.
 Обычный LSwitch восстановлен, clipboard и CG mouse synthesis не использовались.
 
-Открыты: реальная обычная передача очереди, порядок последующего ввода,
+## Native ordinary: контроль, доставка и отказ
+
+Срез `.build/recovery-ordinary-v1/LSwitch.app`:
+main `32e901cc77d0c6c9e399cf74dd1daca0debfcb83d3ef8a7b4281b24779bb68f3`,
+receiver `07730f13d53145aba8da364573d0e05619c38856829a24120d139326f3e98ddd`.
+Manifest связывает 338 source-файлов с 994-test checkpoint.
+
+- Control: standalone keyUp0 с пустым Unicode/flags дошёл до actual AppKit keyUp;
+  text/selection/changeCount не изменились. Driver/capture не запускались.
+- Flush: native capture удержал ровно 2 события / 16 UTF-16 bytes, затем один ordinary
+  claim и один wake вызвали proxy posts обоих событий. Receiver получил `kept`, затем
+  обычный следующий `x`: точное `keptx`, caret=5, changeCount=2 и порядок четырёх labels.
+  Wake не дошёл до receiver. Это local dispatch + fixture observation, не renderer ACK.
+- Retain: принудительный отказ postWake после claim дал 0 attempts/0 returned,
+  те же 2 события/16 bytes в Coordinator. В receiver остались исходные text/selection,
+  changeCount=0 и received=[]; автоматической повторной отправки нет.
+  До раскрытия UI показывал только метаданные, затем известный тестовый фрагмент.
+  Отмена quit сохранила запись, повторное раскрытие подтвердило её; финальный quit
+  через подтверждение удалил только созданную тестовую RAM-запись.
+
+Все три опыта: observed/finalReply/EOF/cleanup=true, childExit=0. Логи
+`.build/recovery-ordinary-v1-{control,flush,retain}.jsonl`. Parent payload не логируется,
+clipboard не используется; child stderr остаётся 308 неразобранных байт без содержимого.
+После каждого опыта восстановлен обычный LSwitch. Production factory остаётся выключенной.
+
+Открыты: интеграция с рабочим AX/clipboard/Unicode и логическим хвостом,
 TCC/Secure Input, lifecycle рабочего приложения и включение принятых профилей.
 Ни stage0/1/2, ни bridge, ни задачи 2–4/6 этого change этим срезом не закрываются.

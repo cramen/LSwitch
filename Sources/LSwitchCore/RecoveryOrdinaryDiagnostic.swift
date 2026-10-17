@@ -176,14 +176,7 @@ public final class RecoveryOrdinaryDiagnostic {
         if adopted { return true }
         if completed { return false }
         if ordinaryAcceptanceStarted || ledger.inputOwner == .ordinaryDelivery {
-            guard let flush else { return false }
-            flush.requestRetention()
-            // Внешний permitsWake может войти повторно до публикации completionTask.
-            // Ordinary owner уже существует: storage fallback не имеет права изъять его proof.
-            guard let completionTask else { return false }
-            _ = await completionTask.value
-            if adopted { return true }
-            return consumeTerminal(flush, result: .retainedFailure) == .retained
+            return await retainOrdinaryDelivery()
         }
         guard let operation, let attachment else { return false }
         driver.bridge.markLost()
@@ -202,6 +195,17 @@ public final class RecoveryOrdinaryDiagnostic {
         guard case .adopted = operation.adopt(in: coordinator, reason: .interceptionStopped) else { return false }
         adopted = true
         return true
+    }
+
+    private func retainOrdinaryDelivery() async -> Bool {
+        guard let flush else { return false }
+        flush.requestRetention()
+        // Внешний permitsWake может войти повторно до публикации completionTask.
+        // Ordinary owner уже существует: storage fallback не имеет права изъять его proof.
+        guard let completionTask else { return false }
+        _ = await completionTask.value
+        if adopted { return true }
+        return consumeTerminal(flush, result: .retainedFailure) == .retained
     }
 
     public var hasPendingInput: Bool { operation != nil && !completed }
