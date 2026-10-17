@@ -16,7 +16,8 @@ public final class EventTapCore {
         case recovering
     }
     private let handler: Handler
-    private let processingQueue: DispatchQueue
+    let processingQueue: DispatchQueue
+    let processingLeases: EventProcessingLeaseController
     private let logger = Logger(subsystem: "LSwitch", category: "EventTap")
     private let correctionLock = NSLock()
     private var queuedInputCorrection: QueuedInputCorrection?
@@ -37,7 +38,7 @@ public final class EventTapCore {
 
     public private(set) var state: State = .stopped
     @MainActor public var onRecoveryStarted: (UInt64) -> Void = { _ in }
-    @MainActor private var deliveryGate = EventDeliveryGate()
+    @MainActor var deliveryGate = EventDeliveryGate()
 
     /// - Parameter handler: вызывается на выделенной последовательной очереди
     ///   для каждого перехваченного события (включая синтетику — фильтрация
@@ -52,24 +53,15 @@ public final class EventTapCore {
     ) {
         self.handler = handler
         self.processingQueue = processingQueue
+        processingLeases = EventProcessingLeaseController(queue: processingQueue)
         self.recoveryCaptureRouter = recoveryCaptureRouter
-    }
-
-    /// После hold пропускает захваченные ранее raw-события через обе очереди потребителя.
-    @MainActor
-    public func drainPendingEvents() async {
-        await withCheckedContinuation { continuation in
-            processingQueue.async {
-                DispatchQueue.main.async { continuation.resume() }
-            }
-        }
     }
 
     public var isInputHeld: Bool { inputBuffer.isHolding }
 
     @MainActor
     public func beginInputHold() -> Bool {
-        guard state == .running, !recoveryCaptureRouter.bypassRawProcessing,
+        guard state == .running, !processingLeases.state.hasLease, !recoveryCaptureRouter.bypassRawProcessing,
               let generation = inputBuffer.begin(at: DispatchTime.now().uptimeNanoseconds) else {
             #if DEBUG
             diagnosticsMetrics?.increment(.holdRefusals)
@@ -127,6 +119,7 @@ public final class EventTapCore {
     }
 
     deinit {
+        processingLeases.state.invalidate(.stopped)
         recoveryCaptureRouter.invalidate(.interceptionStopped)
         healthTimer?.invalidate()
         // Не захватываем уничтожаемый self асинхронно. Наблюдатели удаляются на main.
@@ -161,6 +154,7 @@ public final class EventTapCore {
 
     @MainActor
     public func stop() {
+        processingLeases.state.invalidate(.stopped)
         #if DEBUG
         if state != .stopped { diagnosticsMetrics?.increment(.stops) }
         diagnosticsMetrics?.invalidateHold()
@@ -189,20 +183,12 @@ extension EventTapCore {
     // MARK: - Tap lifecycle
 
     private func createTap() -> Bool {
-        let eventTypes: [CGEventType] = [
-            .keyDown, .keyUp, .flagsChanged,
-            .leftMouseDown, .leftMouseUp, .leftMouseDragged,
-            .rightMouseDown, .rightMouseUp, .rightMouseDragged,
-            .otherMouseDown, .otherMouseUp, .otherMouseDragged
-        ]
-        let eventMask = eventTypes.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
-
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
             options: .defaultTap,
-            eventsOfInterest: eventMask,
+            eventsOfInterest: Self.subscribedEventMask,
             callback: eventTapCallback,
             userInfo: userInfo
         ) else {
@@ -236,6 +222,9 @@ extension EventTapCore {
             return Unmanaged.passUnretained(event)
         }
 
+        if processingLeases.observe(type: type, event: event) {
+            return Unmanaged.passUnretained(event)
+        }
         switch recoveryCaptureRouter.route(type: type, event: event) {
         case .legacy: break
         case .passThrough: return Unmanaged.passUnretained(event)
@@ -258,6 +247,7 @@ extension EventTapCore {
     }
 
     private func scheduleRecovery(reason: String) {
+        processingLeases.state.invalidate(.permissionLost)
         recoveryCaptureRouter.invalidate(.gateUnavailable)
         inputBuffer.cancelLease()
         #if DEBUG
@@ -381,12 +371,9 @@ extension EventTapCore {
     }
     #endif
 
-    /// Проверяется потребителем на main непосредственно перед обработкой, а не до async-перехода.
-    @MainActor
-    public func acceptsForProcessing(_ event: RawKeyEvent) -> Bool { deliveryGate.accepts(timestamp: event.timestamp) }
-
     @MainActor
     func invalidateProcessingContextForRecovery(at timestamp: UInt64) {
+        processingLeases.state.invalidate(.permissionLost)
         deliveryGate.reset(at: timestamp)
         onRecoveryStarted(deliveryGate.cutoff)
     }

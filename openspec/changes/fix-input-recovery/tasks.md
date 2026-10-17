@@ -28,6 +28,13 @@ Tracked Converter связывает один ledger с внешним app-owner
 877 тестов, 0 failures/skipped, `.build/input-recovery-profile-{build,test}.log`.
 Production factory/transport не подключены; эти проверки не закрывают 2.1, 3.1 или 4.2.
 
+17.10.2026: полный и изолированный CI-срез прошли 954 теста без failures/skipped;
+protocol harness — 6 групп. Добавлены async transport completion, processing lease
+и ordinary custody с передачей прежнего claim после частичного отказа; review CLEAN.
+Живой v6 подтвердил native Cmd+A control и его блокировку в protected/closed/logical-lost.
+Mouse, настоящий flush и рабочий lifecycle не приняты; число завершённых задач — 4/14.
+Подробности, failed controls и SHA: `docs/acceptance-2026-10-17.md`.
+
 - [ ] 2.1 Перевести прямой AX-конвертер на журнал мутации и структурированный cleanup, не ослабляя проверки текста, диапазона, identity и разрешений. Проверка: тесты setter success/error, позднего изменения и постоянно недоступного readback различают отсутствие мутации и неизвестное восстановление; успешный AX и точный undo сохраняются.
 - [ ] 2.2 Перевести clipboard-конвертер с AX и native selection на тот же контракт, сохранив независимое владение clipboard. Проверка: обе production-регрессии `select → missing state → Paste=0` сохраняют удержанные события в recovery вместо опасного replay; оригинальный clipboard восстановлен только при своём changeCount, более новое копирование не затирается.
 - [ ] 2.3 Подключить disposition к DEBUG Unicode, сохранив read boundaries, packet policy, inverse preflight и запрет повторной записи. Проверка: persistent count=999, частичный/ignored batch, ignored Right, cancellation до/после Down и exact undo не скрывают неизвестный cleanup; healthy control остаётся успешным, default Unicode не включается.

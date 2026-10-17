@@ -9,7 +9,10 @@ public final class ConversionRecoveryOwner {
     public init() {}
 
     public var hasPendingRecovery: Bool { heldSession?.requiresRecovery == true }
-    public var pendingSession: ConversionRecoverySession? { hasPendingRecovery ? heldSession : nil }
+    public var hasPendingTransport: Bool { heldSession?.isTransportPending == true }
+    public var pendingSession: ConversionRecoverySession? {
+        hasPendingRecovery || hasPendingTransport ? heldSession : nil
+    }
     var isOccupied: Bool { admission != nil }
 
     func reserve() -> ConversionRecoveryAdmission? {

@@ -17,19 +17,21 @@ private struct TrackedLayoutResult {
 
 extension Converter {
     func trackedConversion(
-        expectedWord: String?, trailingText: String, allowUndo: Bool, context: ConversionRecoveryContext,
+        input: ConverterTrackedInput, context: ConversionRecoveryContext,
         session: ConversionRecoverySession, diagnostics: ConversionDiagnostics
     ) async -> Outcome {
         diagnostics.mark(.holdAcquired)
         await session.drainPendingInput()
         diagnostics.mark(.pendingInputDrained)
         guard session.isValid, let plan = trackedPlan(
-            expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
-            context: context, session: session, diagnostics: diagnostics
-        ) else { return finishTrackedFailure(.blocked, context: context, session: session, diagnostics: diagnostics) }
+            input: input, context: context, session: session, diagnostics: diagnostics
+        ) else {
+            return await finishTrackedFailure(.blocked, context: context, session: session, diagnostics: diagnostics)
+        }
         let routed = await performTracked(plan.request, bundleID: context.bundleID, session: session)
         guard case .success(let receipt) = routed.result else {
-            return finishTrackedFailure(routed.result, context: context, session: session, diagnostics: diagnostics)
+            return await finishTrackedFailure(
+                routed.result, context: context, session: session, diagnostics: diagnostics)
         }
         guard plan.request.isValid(), receipt.targetIsCurrent?() != false,
               plan.undo.map({ receipt.converted.utf16.elementsEqual($0.original.utf16) }) ?? true else {
@@ -50,10 +52,11 @@ extension Converter {
             session.retainIfUnfinished()
             return .recoveryRequired
         }
-        guard session.commitOrdinary(prepared, correction: layout.correction) == .ordinaryTransferred else {
+        guard session.commitOrdinary(prepared, correction: layout.correction) == .transportAccepted,
+              await session.awaitOrdinaryCompletion() == .ordinaryTransferred else {
             return .recoveryRequired
         }
-        // Ни cache, ни новый receipt, ни успех не публикуются до принятия transport-ом очереди.
+        // Cache, новый receipt и успех требуют завершённой локальной доставки, а не только принятия очереди.
         cacheTrackedMode(routed.mechanism, bundleID: context.bundleID)
         if plan.undo != nil { return layout.confirmed ? .undone : .partiallyUndone(targetLayout: target) }
         undoStore.save(.init(original: receipt.original, converted: receipt.converted,
@@ -69,10 +72,10 @@ extension Converter {
     }
 
     private func trackedPlan(
-        expectedWord: String?, trailingText: String, allowUndo: Bool, context: ConversionRecoveryContext,
+        input: ConverterTrackedInput, context: ConversionRecoveryContext,
         session: ConversionRecoverySession, diagnostics: ConversionDiagnostics
     ) -> TrackedConversionPlan? {
-        let undo = allowUndo ? undoStore.pendingUndo() : nil
+        let undo = input.allowUndo ? undoStore.pendingUndo() : nil
         let previousTarget = undoDocumentTarget
         if let undo {
             let valid = undo.bundleID == context.bundleID && undoContext?() == true
@@ -82,9 +85,9 @@ extension Converter {
             guard valid else { diagnostics.reject(.contextChanged); return nil }
         }
         let request = ConversionRequest(
-            expectedWord: undo?.converted ?? expectedWord, trailingText: undo?.trailingText ?? trailingText,
+            expectedWord: undo?.converted ?? input.expectedWord, trailingText: undo?.trailingText ?? input.trailingText,
             replacement: undo?.original, sourceLayout: undo == nil ? context.sourceLayout : nil,
-            useSelection: undo == nil && allowUndo, diagnostics: diagnostics, safetyLedger: session.ledger,
+            useSelection: undo == nil && input.allowUndo, diagnostics: diagnostics, safetyLedger: session.ledger,
             beginMutation: { session.beginMutation() }, canCleanup: { session.canCleanup },
             isValid: { session.isValid }
         )
@@ -94,11 +97,12 @@ extension Converter {
     private func finishTrackedFailure(
         _ result: ConversionResult, context: ConversionRecoveryContext, session: ConversionRecoverySession,
         diagnostics: ConversionDiagnostics
-    ) -> Outcome {
+    ) async -> Outcome {
         let outcome = outcome(for: result, diagnostics: diagnostics)
         let text: ConversionSafetyTextEvidence = session.ledger.submissionCount == 0 ? .unchangedByOperation : .unknown
         guard let prepared = session.prepareFinalization(text: text, ordinaryRouteValid: context.isCurrent()),
-              session.commitOrdinary(prepared, correction: nil) == .ordinaryTransferred else {
+              session.commitOrdinary(prepared, correction: nil) == .transportAccepted,
+              await session.awaitOrdinaryCompletion() == .ordinaryTransferred else {
             return .recoveryRequired
         }
         return outcome

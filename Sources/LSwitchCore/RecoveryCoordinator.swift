@@ -1,7 +1,9 @@
 import CoreGraphics
 import Foundation
 
-enum RecoveryReason: Equatable, Sendable { case cleanupUnconfirmed, admissionStopped, gateLost, interceptionStopped }
+enum RecoveryReason: Equatable, Sendable {
+    case cleanupUnconfirmed, admissionStopped, gateLost, interceptionStopped, ordinaryDeliveryUnconfirmed
+}
 enum RecoveryProtectionStatus: Equatable, Sendable { case unverified, unavailable, interceptionOff }
 enum RecoveryAdoptionFailure: Equatable, Sendable { case noReservation, wrongBinding, countMismatch, alreadyClaimed }
 enum RecoveryAdoptionResult: Equatable, Sendable { case adopted(UUID), rejected(RecoveryAdoptionFailure) }
@@ -16,6 +18,7 @@ struct RecoveryMetadata: Equatable, Sendable {
     let payloadDeleted: Bool
     let isVisible: Bool
     let protection: RecoveryProtectionStatus
+    let ordinaryDelivery: OrdinaryDeliveryProgress?
 }
 
 struct RecoveryUserIntent: Equatable, Sendable {
@@ -106,11 +109,41 @@ final class RecoveryCoordinator {
     }
 
     /// Вызывается только после scoped buffer.end по отдельному решению safety ledger. Сам replay не выполняется.
+    @available(*, deprecated, message: "Используйте terminal proof нового ordinary transport")
     func completeOrdinary(sealed: RecoveryAdmissionSeal, claim: ConversionSafetyInputClaim) -> Bool {
         guard record == nil, let reservation, reservation.owns(sealed),
               claim.operation == sealed.binding.scope.operation, claim.owner == .ordinaryDelivery else { return false }
         self.reservation = nil
         return true
+    }
+
+    /// Новый путь требует terminal proof локального flush, не одного лишь ordinary claim.
+    func completeOrdinary(proof: OrdinaryTerminalProof) -> Bool {
+        guard record == nil, let reservation, reservation.owns(proof.seal),
+              proof.claim.operation == proof.seal.binding.scope.operation,
+              proof.claim.owner == .ordinaryDelivery, proof.scope.binding == proof.seal.binding,
+              proof.consumeCompletion(seal: proof.seal) else { return false }
+        self.reservation = nil
+        return true
+    }
+
+    /// Retained transport передаёт полный оригинал с прежним ordinary claim. Второго ledger claim здесь нет.
+    func adoptRetainedOrdinary(proof: OrdinaryTerminalProof) -> RecoveryAdoptionResult {
+        guard record == nil, let reservation else { return .rejected(.noReservation) }
+        guard reservation.owns(proof.seal), proof.scope.binding == proof.seal.binding,
+              proof.claim.operation == proof.seal.binding.scope.operation,
+              proof.claim.owner == .ordinaryDelivery, proof.progress.failure != nil else {
+            return .rejected(.wrongBinding)
+        }
+        guard proof.progress.totalEvents == proof.seal.counts.events else { return .rejected(.countMismatch) }
+        guard let events = proof.takeRetained(seal: proof.seal) else { return .rejected(.alreadyClaimed) }
+        let stored = StoredRecord(admission: reservation, sealed: proof.seal,
+                                  events: events, reason: .ordinaryDeliveryUnconfirmed)
+        stored.ordinaryDelivery = proof.progress
+        stored.protection = protectionStatus
+        record = stored
+        self.reservation = nil
+        return .adopted(stored.identifier)
     }
 
     func abandonBeforeHold(_ prepared: PreparedRecoveryAdmission) -> Bool {
@@ -267,6 +300,7 @@ final class RecoveryCoordinator {
         var events: [CGEvent]?
         var isVisible = true
         var protection = RecoveryProtectionStatus.unverified
+        var ordinaryDelivery: OrdinaryDeliveryProgress?
 
         init(
             admission: PreparedRecoveryAdmission, sealed: RecoveryAdmissionSeal,
@@ -281,7 +315,8 @@ final class RecoveryCoordinator {
         var metadata: RecoveryMetadata {
             RecoveryMetadata(identifier: identifier, binding: sealed.binding, reason: reason,
                              eventCount: events?.count ?? 0, utf16Bytes: events == nil ? 0 : sealed.counts.utf16Bytes,
-                             payloadDeleted: events == nil, isVisible: isVisible, protection: protection)
+                             payloadDeleted: events == nil, isVisible: isVisible, protection: protection,
+                             ordinaryDelivery: ordinaryDelivery)
         }
     }
 }

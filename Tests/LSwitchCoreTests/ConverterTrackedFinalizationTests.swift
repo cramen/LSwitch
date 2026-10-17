@@ -8,9 +8,9 @@ final class ConverterTrackedFinalizationTests: XCTestCase {
         let fixture = TrackedConverterFixture()
         fixture.succeed(fixture.accessibility)
         let diagnostics = ConversionDiagnostics(bundleID: "com.example.TextEdit", triggerTimestamp: nil,
-                                                attempt: 1, automatic: false, now: { 10 }) { sample in
+                                                attempt: 1, automatic: false, now: { 10 }, emit: { sample in
             if sample.phase == .textConfirmed { fixture.safe = false }
-        }
+        })
         let result = await fixture.converter.trigger(diagnostics: diagnostics)
         XCTAssertEqual(result, .recoveryRequired)
         XCTAssertEqual(fixture.ledgers.first?.decision?.input, .replayAuthorized)

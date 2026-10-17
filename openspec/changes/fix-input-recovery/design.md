@@ -85,6 +85,15 @@ PID+birth time, удерживаемые AX element/window, контекст д�
 с точными UTF-16 и диапазоном. Неподдержанный parameterized API, неверный count или
 превышение предела дают отказ; fallback к неограниченному AXValue отсутствует.
 
+Валидное отсутствие работы отделяется от fault только для ручного запроса без
+expectedWord/replacement: полный профильный snapshot содержит collapsed caret и
+не содержит слова перед ней. Повторный свежий guarded snapshot должен точно
+совпасть по UTF-16 и каретке; до и после него нет собственной отправки, отмены или
+fault. Такое `noWorkObserved` сохраняет noOwnedMutation без receipt/TIS/звука успеха;
+обычная доставка всё равно требует отдельного актуального маршрута. Nil snapshot,
+неверные count/range, expected-span mismatch, чужое выделение, отказ API или контекста
+не относятся к этому исключению и сохраняют sticky fault/recovery.
+
 Ledger хранит профильное основание отдельно от receiverCompleted. В профильном
 режиме error/timeout, потеря identity/прав, отмена или неоднозначное чтение создают
 sticky fault: последующее совпадение либо поздний ответ не разрешают новую мутацию,
@@ -123,11 +132,23 @@ Stop, deinit и timer только защёлкивают состояние; о
 Обычная доставка требует отдельного принятого permit и не следует из завершения hold.
 Это план wiring для 3.1/3.2/4.1; он не объявляет runtime подключённым.
 
+Следующий recipient capture использует тот же port/reservation/retirement, но отдельную
+политику заголовков: события выбранного per-PID endpoint вместо фиксированной fixture-пары.
+Endpoint связывается с полным scope до начала захвата; этот режим не устанавливается
+на глобальный tap. Зарегистрированные собственные native пакеты остаются в своём
+gate-протоколе. Unicode length читается только для keyDown/keyUp после допуска;
+modifiers/mouse/scroll сохраняются с нулевым текстовым cost и исходным порядком.
+После retirement сохраняется metadata tombstone без новых payload reads.
+
 #### D2.2. Подключение отслеживаемой операции к Converter
 
 Явная optional factory отделяет старый runtime от нового tracked режима. Установленная
 factory, вернувшая unavailable, запрещает hold/engine/mutation; переход в legacy после
-такого отказа отсутствует. Новый Session удерживает один ledger для conversion,
+такого отказа отсутствует. Factory может асинхронно подготовить worker до capture:
+на время ожидания owner уже зарезервирован, повторный запуск запрещён. После ожидания
+снова проверяются контекст, отмена и точная регистрация Session; устаревший контекст
+не активирует capture, а уже созданная очередь остаётся у её владельца.
+Новый Session удерживает один ledger для conversion,
 разрешённого fallback и undo; ограничение профиля на AX проверяется до выбора движка.
 
 Успешный engine receipt сначала остаётся кандидатом. Перед user-visible успехом
@@ -137,9 +158,11 @@ Capture продолжается до атомарного commit: промеж�
 разрешён только при отсутствии собственной отправки, fault и key debt.
 
 TIS/readback выполняется после допуска финализации, но до доставки; коррекция
-применяется к доставляемым копиям, а исходная запись не переписывается. Только после
-подтверждённого принятия очереди обычным transport сохраняются undo/cache и вызывается
-сигнал успеха. Отказ TIS сохраняет прежний partial-result контракт без звука успеха.
+применяется к доставляемым копиям, а исходная запись не переписывается. Принятие
+ownership и завершение доставки разделены: только после отдельного
+`locallyDispatched` сохраняются undo/cache и вызывается сигнал успеха. Это локальное
+завершение transport, а не renderer ACK. Отказ TIS сохраняет прежний partial-result
+контракт без звука успеха.
 Recovery-ветка не вызывает legacy release, не публикует receipt и не обучает автоматику.
 
 Отказ transport до принятия очереди оставляет её исходному владельцу для recovery.
@@ -159,6 +182,110 @@ claim может перейти только recovery-владельцу. Пос
 сохранённых generation/health/quota; IPC и native post под capture/admission locks
 запрещены. Принятие владения очередью не обозначает renderer ACK. Поздний отказ уже
 принявшего transport не возвращает очередь прежнему владельцу и не запускает retry.
+
+`commitOrdinary` синхронно принимает очередь и выдаёт отдельный completion handle.
+Его claim callback после внешних проверок обращается только к чистым phase/binding/
+ledger-состояниям; повторных AX, TIS, NSWorkspace или route callbacks под lock нет.
+Session ожидает `locallyDispatched` либо `retainedFailure` отдельно. Внешний owner
+остаётся занят до terminal completion; новые конвертации и ранняя публикация успеха
+запрещены. Отмена ожидания только запрашивает сохранение у transport, не завершает
+его преждевременно и не освобождает очередь. После принятого ordinary claim отказ
+сохраняет данные у того же transport/owner с тем же claim; новый recovery claim и
+повторная отправка не создаются. Pending/retained состояние доступно интерфейсу
+через метаданные owner. Настоящий native transport и его временные/объёмные пределы
+принимаются отдельно, до включения production factory.
+
+#### D2.3. Пауза логической обработки глобального tap
+
+Отдельная scoped processing lease не удерживает native events и не подменяет
+recipient capture. Пока она действует, глобальный tap возвращает исходное событие,
+не применяет к нему коррекцию и не вызывает handler/detector/auto. После допуска
+capture он сохраняет только ограниченный логический дубликат RawKeyEvent в RAM:
+не более 256 событий и 64 KiB UTF-16, с общим сроком 400 мс. Это не recovery-запись
+и не второй владелец удержанных CGEvent. Неуспех, истечение, focus/OFF/TCC очищают
+только логический дубликат и прекращают новые payload reads; исходная held queue
+остаётся у независимого app-owner. Legacy-путь без lease не меняется.
+Общая маска tap включает scrollWheel для activity/lease; без lease прокрутка
+по-прежнему проходит native, не попадая в legacy hold или raw decoder.
+
+Begin публикует паузу до ожидания processingQueue→Main barrier. Уже поставленные
+handler callbacks завершаются до допуска новой мутации. Синхронный metadata-only
+счётчик callback activity закрывает гонку begin→recipient arm: новый физический ввод
+до arm делает подготовку устаревшей, а не просто исчезает из notifyOtherKeystroke.
+Проверка preCaptureReady и arm выполняются подряд на MainActor без await; повторная
+проверка после arm не допускает мутацию при reentry/изменении активности.
+
+Finish одноразово связывается с operation scope и экземпляром tap. Один Main блок
+сначала применяет outcome/очищает прежний контекст слова, затем передаёт FIFO tail
+и лишь после этого возобновляет обычные handler callbacks. Коррекция tail является
+чистой функцией над снимками и соответствует принятому native transport interval;
+исходные CGEvent не изменяются. Отдельный tail из per-PID сюда не добавляется, чтобы
+не удваивать ввод. Ошибочный/устаревший finish не публикует хвост чужой операции.
+
+Это внутренний компонентный контракт: main.swift и production factory пока его
+не используют. Native flush, реальная смена фокуса, Secure Input и lifecycle должны
+пройти отдельную системную приёмку до включения рабочего профиля.
+
+#### D2.4. Обычный transport и сохранение частично отправленной очереди
+
+После единственного ordinary claim полный scoped port передаёт закрытый batch
+app-owned OrdinaryInputCustody. Для take нужны локальный quiescence proof, конкретный
+seal и совпадение operation/process instance/hold/tap; это не разрешение renderer ACK.
+Оригиналы изымаются из batch ровно один раз и никогда не изменяются для доставки.
+Transport заранее создаёт отдельные копии; отсутствие копии не заменяется оригиналом.
+Correction и post выполняются вне port/admission/custody locks.
+
+Dispatch одноразовый, ограничен исходной admission-квотой и явным deadline. До каждого
+post фиксируется attempt ordinal, после возврата — returned ordinal. Retention/loss/
+истечение бюджета запрещают следующий attempt; уже зарезервированная попытка может
+завершиться и входит в потенциально отправленный префикс. Это не ретроактивная отмена.
+Reentry не запускает второй dispatch. Terminal capsule выпускается только после
+quiescence и хранит полный оригинал вместе с metadata attempted/returned, без payload
+в логах и без утверждения фактической обработки приложением.
+
+Healthy completion освобождает reservation через отдельный completeOrdinary(proof).
+При отказе Coordinator.adoptRetainedOrdinary(proof) принимает оригиналы с тем же
+ordinary claim, а не выдаёт новый recovery claim. Чужой/reused proof отклоняется до
+изъятия; отказ adopt оставляет capsule у transport/app-owner. При attempted>0 публичные
+метаданные требуют сообщить, что часть событий уже могла попасть в исходное приложение.
+Автоматического повтора нет. Старый recovery adopt не принимает ordinary claim.
+
+Первый компонент использует только подменяемые copy/prepare/post границы в RAM.
+Настоящий worker marker, переход gate к pass-through, CGEventTapPostEvent и его
+системная приёмка подключаются отдельно; terminal local completion не становится
+renderer ACK. Проверки включают каждый ordinal частичного отказа, copy failure,
+cancel/deadline/reentry, lifetime, foreign/reused proof и rejected adoption.
+
+#### D2.5. DEBUG recipient flush и атомарная публикация capture
+
+App-owner регистрирует Session до запуска асинхронного arm. Один блок того же worker
+run loop публикует recipient endpoint и активирует gate; callbacks не могут наблюдать
+промежуток «gate protected, endpoint ещё отсутствует». MainActor ждёт готовность без
+синхронной блокировки. Отмена/timeout закрывают одноразовую подготовку: поздний worker
+block не восстанавливает scope. Проверка отпущенных mouse buttons относится только к
+этому prearm; физический mouseDown после arm сам по себе не прекращает scoped capture.
+
+Перед ordinary claim готовится один уникальный control keyUp с keyCode 0 и пустыми
+flags, связанный с sender PID и operation/process instance. Он пока не признан
+нейтральным для реального AppKit: до положительного control весь transport DEBUG-only.
+Diagnostic fixture может заранее передать свою уникальную выделенную метку; production
+должен выделять её сам. Повторной отправки marker нет. State хранит только его metadata
+tombstone и weak transport; поздний или неправильный own marker подавляется даже после
+обычного завершения и освобождения владельца.
+
+После единственного claim capture остаётся открытым до marker callback. Callback
+закрывает новые route tickets, seal-ит admission и получает локальный quiescence proof,
+после чего port передаёт оригиналы той же OrdinaryInputCustody. Копии, correction и
+CGEventTapPostEvent(proxy) выполняются вне всех внутренних locks. Только полный
+локальный returned-префикс позволяет переключить этот endpoint в normal pass-through
+до возврата callback; это не receiver completion и не renderer ACK.
+
+Retention, deadline, lost/stop и отсутствие proxy не повторяют marker. Worker закрывает
+локальный capture без post и повторяет лишь неблокирующую проверку quiescence. Пока
+старые count/copy/counter callbacks не завершились, terminal result не публикуется.
+После quiescence полный оригинал остаётся в terminal proof с тем же ordinary claim;
+quarantine сохраняется. App-owner потребляет proof через существующие Coordinator
+complete/adoptRetained методы; refused adoption не удаляет proof и не разрешает replay.
 
 ### D3. Подготовка допуска до первой мутации
 
@@ -475,9 +602,35 @@ Mouse проверяется через обычное UI-управление �
 подтвердившего реальные NSEvent/CGEvent; AXPress без таких событий не считается
 проверкой mouse tap. Синтетический mouse driver этим планом не разрешается.
 
+Перед activation проверяются отпущенные кнопки мыши: gate не должен перехватывать
+завершение уже начатого AppKit tracking loop. В mouse mask также входит scrollWheel;
+mouseMoved не блокируется. Modifier release не добавляет ни одного бита относительно
+последнего действительно пропущенного состояния. Неоднозначное сочетание левого и
+правого модификаторов блокируется до однозначного clearing-state, без фиктивного ACK.
+
 Проверяются healthy control, protected phase, close/loss и влияние на другой процесс.
 Без control и полного живого протокола новые модельные тесты не закрывают 4.2.
 Это продолжение существующей обязательной матрицы, не включение production factory.
+
+Контроли v1–v3 доставили известный Cmd+A с правильными флагами/символом, но без
+эффекта выделения в child; это не положительная проверка shortcut. Следующий стенд
+проверяет отдельный вложенный fixture bundle с собственной identity и обычным AppKit
+activation policy. Он запускает только nonce-bound receiver, не обычный AppDelegate,
+не запрашивает AX/Input Monitoring/Post permissions и не устанавливает tap.
+Перехват и клавиатурный драйвер остаются в основном подписанном приложении.
+Раздельные identity должны также дать CUA однозначный выбор тестового окна; это
+гипотеза стенда, требующая control, а не доказанное объяснение предыдущего результата.
+
+Диагностика failed control дополняется только фиксированными Bool: editable/selectable,
+цель обычного Select All и enabled menu item после обычного menu.update. Действие
+Select All вручную не вызывается. Последующее A/B сравнивает принудительный Unicode
+командного CGEvent с нативным Unicode, сохраняя остальные свойства пакетов/маршрут.
+
+Для диагностики не сработавшего Cmd+A первый exact known-parent keyDown дополнительно
+даёт только булевы признаки Command, characters=="a" и charactersIgnoringModifiers=="a".
+Строки не сохраняются и не выводятся; чужие события до этих чтений отбрасываются.
+Обычный Select All проходит стандартное Application/Edit menu и responder chain;
+ручной вызов selectAll из keyDown не допускается как замена проверяемого поведения.
 
 ## Risks / Trade-offs
 

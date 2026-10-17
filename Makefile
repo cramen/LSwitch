@@ -2,7 +2,7 @@
 # поэтому используем toolchain полного Xcode напрямую.
 export DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
 
-.PHONY: build test run lint app run-app run-app-refuse-ru run-app-refuse-en
+.PHONY: build test run lint app run-app run-app-refuse-ru run-app-refuse-en check-recovery-protocol matrix-app
 
 APP_DIR := .build/LSwitch.app
 
@@ -11,6 +11,14 @@ build:
 
 test:
 	swift test
+
+# Чистые проверки App-протокола: без NSApplication, глобального tap и отправки событий.
+check-recovery-protocol:
+	mkdir -p .build
+	xcrun swiftc -DDEBUG -parse-as-library Sources/LSwitch/RecoveryIsolationProtocol.swift \
+		Sources/LSwitch/RecoveryIsolationMatrix.swift Sources/LSwitch/RecoveryIsolationChildMailbox.swift \
+		Tests/RecoveryIsolationHarness/RecoveryIsolationMatrixChecks.swift -o .build/recovery-matrix-checks
+	.build/recovery-matrix-checks
 
 run:
 	swift run lswitch
@@ -35,6 +43,19 @@ app:
 
 run-app: app
 	open $(APP_DIR)
+
+# Изолированный GUI-приёмник имеет отдельную identity и не запускает обычный AppDelegate.
+matrix-app: app
+	swift build -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist \
+		-Xlinker $(CURDIR)/packaging/RecoveryReceiver-Info.plist
+	mkdir -p "$(APP_DIR)/Contents/Helpers/LSwitch Event Receiver.app/Contents/MacOS"
+	cp .build/debug/lswitch \
+		"$(APP_DIR)/Contents/Helpers/LSwitch Event Receiver.app/Contents/MacOS/LSwitchReceiver"
+	cp packaging/RecoveryReceiver-Info.plist "$(APP_DIR)/Contents/Helpers/LSwitch Event Receiver.app/Contents/Info.plist"
+	cp -R "$(APP_DIR)/Contents/Resources" "$(APP_DIR)/Contents/Helpers/LSwitch Event Receiver.app/Contents/"
+	codesign --force --sign "LSwitch Dev" --identifier ru.cramen.lswitch.receiverprobe \
+		"$(APP_DIR)/Contents/Helpers/LSwitch Event Receiver.app"
+	codesign --force --sign "LSwitch Dev" --identifier ru.cramen.lswitch $(APP_DIR)
 
 # Перед сменой режима завершить предыдущий экземпляр. Аргумент действует
 # только в debug-сборке; после приёмки запускать обычный run-app.

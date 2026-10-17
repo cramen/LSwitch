@@ -6,6 +6,7 @@ public protocol RecoveryIsolationProtecting: AnyObject, Sendable {
     var bridge: RecoveryRecipientProbeBridge { get }
     var isProtectionAvailable: Bool { get }
     var permitsMutation: Bool { get }
+    @MainActor func activateProtection() -> Bool
     @MainActor func refreshProtection() -> Bool
     func withProtection(_ body: () -> Void)
 }

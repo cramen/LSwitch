@@ -32,6 +32,14 @@ final class RecoveryIsolationTestProtection: RecoveryIsolationProtecting, @unche
         return isProtectionAvailable
     }
 
+    @MainActor
+    func activateProtection() -> Bool {
+        lock.lock()
+        let ready = available
+        lock.unlock()
+        return ready && bridge.activateProtection()
+    }
+
     func withProtection(_ body: () -> Void) {
         lock.lock()
         defer { lock.unlock() }

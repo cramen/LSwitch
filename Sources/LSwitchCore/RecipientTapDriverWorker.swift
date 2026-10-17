@@ -77,6 +77,11 @@ final class RecipientTapDriverWorker: @unchecked Sendable {
         let identityMatches = SystemProcessIdentity.isCurrent(target) && SystemProcessIdentity.isCurrent(sender)
         let headEnabled = active && ports.0.map { CGEvent.tapIsEnabled(tap: $0) } == true
         let tailEnabled = active && ports.1.map { CGEvent.tapIsEnabled(tap: $0) } == true
+        let buttonsReleased = (0..<32).allSatisfy { number in
+            guard let button = CGMouseButton(rawValue: UInt32(number)) else { return false }
+            return !CGEventSource.buttonState(.combinedSessionState, button: button)
+        }
+        state.recordPhysicalButtons(released: buttonsReleased)
         state.recordHealth(head: headEnabled, tail: tailEnabled, identityMatches: identityMatches)
         if !identityMatches { requestStop(.identityChanged) }
         return state.workerReady
@@ -122,7 +127,7 @@ final class RecipientTapDriverWorker: @unchecked Sendable {
 
     /// Проверенная head/tail механика probe. IPC не удерживает lock, чтобы timeout/stop не ожидал его бесконечно.
     private func install(on current: CFRunLoop) -> Bool {
-        let types = [CGEventType.keyDown, .keyUp]
+        let types = RecipientEventKind.eventTypes
         let mask = types.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
         let context = Unmanaged.passUnretained(state).toOpaque()
         let newHead = CGEvent.tapCreateForPid(

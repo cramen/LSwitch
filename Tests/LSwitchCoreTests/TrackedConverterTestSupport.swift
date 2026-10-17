@@ -29,6 +29,10 @@ final class TrackedConversionAdapter: ConversionRecoveryAdapter {
     var onPrepare: () -> Void = {}
     var onCommit: () -> Void = {}
     var beforeClaim: () -> Void = {}
+    var onAccepted: () -> Void = {}
+    var completesImmediately = true
+    private(set) var transport: ConversionOrdinaryTransport?
+    private var completed = false
     let record: (String) -> Void
 
     init(record: @escaping (String) -> Void) { self.record = record }
@@ -43,25 +47,36 @@ final class TrackedConversionAdapter: ConversionRecoveryAdapter {
     func prepareOrdinary() -> Bool {
         record("prepareDelivery")
         onPrepare()
-        isCaptureValid = false
         return prepareAllowed
     }
     func commitOrdinary(
         correction: ConversionRecoveryLayoutTransition?, claimOwnership: () -> ConversionSafetyInputClaim?
-    ) -> Bool {
+    ) -> ConversionOrdinaryAcceptance {
         record("commit")
         beforeClaim()
-        if acceptWithoutClaim { return true }
-        guard commitAllowed, let claim = claimOwnership() else { return false }
+        if acceptWithoutClaim { return .accepted(ConversionOrdinaryTransport()) }
+        guard commitAllowed, let claim = claimOwnership() else { return .refused }
         acceptedClaim = claim
         record("claim")
         if let correction { corrections.append(correction); record("correction") }
         onCommit()
-        guard !failAfterClaim else { return false }
-        delivered += queued
-        queued = 0
-        record("deliver")
-        return true
+        guard !failAfterClaim else { return .refused }
+        let accepted = ConversionOrdinaryTransport()
+        transport = accepted
+        isCaptureValid = false
+        onAccepted()
+        if completesImmediately { completeTransport(.locallyDispatched) }
+        return .accepted(accepted)
+    }
+    func completeTransport(_ result: ConversionOrdinaryTransportResult) {
+        guard !completed, let transport else { return }
+        completed = true
+        if result == .locallyDispatched {
+            delivered += queued
+            queued = 0
+            record("deliver")
+        }
+        XCTAssertTrue(transport.complete(result))
     }
     func retainForRecovery(claim: ConversionSafetyInputClaim?) {
         retainedClaim = claim
@@ -94,6 +109,8 @@ final class TrackedConverterFixture {
     var layoutAccepted = true
     var applyLayout = true
     var configureAdapter: (TrackedConversionAdapter) -> Void = { _ in }
+    var beforeFactory: () async -> Void = {}
+    var afterFactory: () async -> Void = {}
     var onSwitch: () -> Void = {}
     var onSound: () -> Void = {}
     var onLayoutRead: () -> Void = {}
@@ -114,7 +131,13 @@ final class TrackedConverterFixture {
         makeAXEngine: { [accessibility] in accessibility },
         makeClipboardEngine: { [clipboard] in clipboard },
         makeUnicodeEngine: { [weak self] _ in self?.unicodePreferred == true ? self?.unicode : nil },
-        recoverySessionFactory: { [weak self] context in self?.makeSession(context) },
+        recoverySessionFactory: { [weak self] context in
+            guard let self else { return nil }
+            await self.beforeFactory()
+            let session = self.makeSession(context)
+            await self.afterFactory()
+            return session
+        },
         recoveryOwner: includeOwner ? owner : nil,
         captureContext: { [weak self] in { self?.safe == true } },
         beginInputHold: { [weak self] in self?.actions.append("legacyHold"); return true },

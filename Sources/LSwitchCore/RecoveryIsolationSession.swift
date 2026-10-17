@@ -118,7 +118,7 @@ public final class RecoveryIsolationSession {
         guard !Task.isCancelled, !preparationStarted, router.bypassRawProcessing,
               protection.bridge === bridge else { return false }
         preparationStarted = true
-        guard targetIsCurrent, bridge.activateProtection(), protection.refreshProtection(),
+        guard targetIsCurrent, protection.activateProtection(), protection.refreshProtection(),
               protectionSlot.bind(protection), protectionSlot.permitsMutation else {
             markPeerUnavailable()
             return false

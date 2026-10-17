@@ -28,10 +28,10 @@ struct RecoveryCaptureCounters: Sendable {
 
 enum RecoveryCapturePhase: Equatable, Sendable { case beforeCount, afterCount, beforeCapture, afterCapture }
 
-/// Endpoint не читает Unicode до проверки фиксированных fixture headers и действующего допуска.
+/// Endpoint не читает Unicode до проверки header policy и действующего допуска.
 final class RecoveryCaptureAttachment: @unchecked Sendable {
     let port: RecoveryCapturePort
-    let filter: RecoveryFixtureCaptureFilter
+    let policy: RecoveryCapturePolicy
     private let ownMarker: @Sendable (Int64, Int64) -> Bool
     private let clock: @Sendable () -> UInt64
     private let observePhase: @Sendable (RecoveryCapturePhase) -> Void
@@ -41,35 +41,48 @@ final class RecoveryCaptureAttachment: @unchecked Sendable {
     private var rejected = 0
     private var reads = 0
 
-    init(
+    convenience init(
         port: RecoveryCapturePort, filter: RecoveryFixtureCaptureFilter,
         ownMarker: @escaping @Sendable (Int64, Int64) -> Bool,
         clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
         observePhase: @escaping @Sendable (RecoveryCapturePhase) -> Void = { _ in }
     ) {
+        self.init(port: port, policy: .fixture(filter), ownMarker: ownMarker, clock: clock, observePhase: observePhase)
+    }
+
+    init(
+        port: RecoveryCapturePort, policy: RecoveryCapturePolicy,
+        ownMarker: @escaping @Sendable (Int64, Int64) -> Bool,
+        clock: @escaping @Sendable () -> UInt64 = { DispatchTime.now().uptimeNanoseconds },
+        observePhase: @escaping @Sendable (RecoveryCapturePhase) -> Void = { _ in }
+    ) {
         self.port = port
-        self.filter = filter
+        self.policy = policy
         self.ownMarker = ownMarker
         self.clock = clock
         self.observePhase = observePhase
     }
 
+    var tombstone: RecoveryCaptureTombstone { .init(policy: policy, ownMarker: ownMarker) }
+
     func route(type: CGEventType, event: CGEvent, readIsCurrent: () -> Bool = { true }) -> RecoveryCaptureRoute {
-        guard type == .keyDown || type == .keyUp else { return .passThrough }
+        guard InputEventBuffer.canHold(type), event.type == type else { return .passThrough }
         let marker = event.getIntegerValueField(.eventSourceUserData)
         let sender = event.getIntegerValueField(.eventSourceUnixProcessID)
-        guard marker != SyntheticEventMarker.magic, !ownMarker(sender, marker),
-              filter.matches(type: type, sender: sender, marker: marker) else { return .passThrough }
+        guard !ownMarker(sender, marker),
+              policy.matches(type: type, sender: sender, marker: marker) else { return .passThrough }
         let now = clock()
         port.expire(scope: port.scope, at: now)
         guard readIsCurrent(), port.permitsMutation(for: port.scope) else { recordRejected(); return .suppress }
         observePhase(.beforeCount)
         guard readIsCurrent() else { recordRejected(); return .suppress }
         var count = 0
-        event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &count, unicodeString: nil)
-        lock.lock()
-        reads += 1
-        lock.unlock()
+        if type == .keyDown || type == .keyUp {
+            event.keyboardGetUnicodeString(maxStringLength: 0, actualStringLength: &count, unicodeString: nil)
+            lock.lock()
+            reads += 1
+            lock.unlock()
+        }
         observePhase(.afterCount)
         guard readIsCurrent() else { recordRejected(); return .suppress }
         observePhase(.beforeCapture)
@@ -117,32 +130,45 @@ final class RecoveryCaptureAttachment: @unchecked Sendable {
 final class RecoveryCaptureRouter: @unchecked Sendable {
     let identifier = UUID()
     let bypassRawProcessing: Bool
+    private let acceptsRecipientInput: Bool
     private let lock = NSLock()
     private var attachment: RecoveryCaptureAttachment?
-    private var tombstone: RecoveryFixtureCaptureFilter?
+    private var tombstone: RecoveryCaptureTombstone?
     private var used = false
     private var activeRoutes = 0
     private var retirement: UUID?
     private var retirementProof: RecoveryRetiredCaptureProof?
 
-    init(bypassRawProcessing: Bool = false) { self.bypassRawProcessing = bypassRawProcessing }
+    init(bypassRawProcessing: Bool = false, acceptsRecipientInput: Bool = false) {
+        self.bypassRawProcessing = bypassRawProcessing
+        self.acceptsRecipientInput = acceptsRecipientInput
+    }
 
     func attach(_ candidate: RecoveryCaptureAttachment) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard bypassRawProcessing, !used, candidate.port.scope.tapIdentifier == identifier else { return false }
+        guard bypassRawProcessing, !used, candidate.port.scope.tapIdentifier == identifier,
+              candidate.policy != .recipientInput || acceptsRecipientInput else { return false }
         used = true
         attachment = candidate
-        tombstone = candidate.filter
+        tombstone = candidate.tombstone
         return true
     }
 
     func matchesCapture(scope: RecoveryOperationTarget, filter: RecoveryFixtureCaptureFilter) -> Bool {
+        matchesCapture(scope: scope, policy: .fixture(filter))
+    }
+
+    func matchesCapture(scope: RecoveryOperationTarget, policy: RecoveryCapturePolicy) -> Bool {
+        captureTombstone(scope: scope, policy: policy) != nil
+    }
+
+    func captureTombstone(scope: RecoveryOperationTarget, policy: RecoveryCapturePolicy) -> RecoveryCaptureTombstone? {
         lock.lock()
         defer { lock.unlock() }
-        guard retirement == nil, let attachment else { return false }
-        return attachment.port.scope.binding.scope == scope
-            && attachment.port.scope.tapIdentifier == identifier && attachment.filter == filter
+        guard retirement == nil, let attachment, attachment.port.scope.binding.scope == scope,
+              attachment.port.scope.tapIdentifier == identifier, attachment.policy == policy else { return nil }
+        return attachment.tombstone
     }
 
     func route(type: CGEventType, event: CGEvent) -> RecoveryCaptureRoute {
@@ -155,10 +181,7 @@ final class RecoveryCaptureRouter: @unchecked Sendable {
             defer { finishRoute() }
             return current.route(type: type, event: event, readIsCurrent: { self.readIsCurrent })
         }
-        if let retired, retired.ownsHeader(
-            sender: event.getIntegerValueField(.eventSourceUnixProcessID),
-            marker: event.getIntegerValueField(.eventSourceUserData)
-        ) { return .suppress }
+        if retired?.suppresses(type: type, event: event) == true { return .suppress }
         return bypassRawProcessing ? .passThrough : .legacy
     }
 

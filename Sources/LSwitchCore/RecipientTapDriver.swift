@@ -40,6 +40,19 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
         return state.isProtectionAvailable
     }
 
+    /// До activation: не разрываем уже начатый AppKit mouse tracking loop.
+    @MainActor
+    public func canArmProtection() -> Bool {
+        _ = worker.refreshHealth()
+        return state.canArmProtection
+    }
+
+    @MainActor
+    public func activateProtection() -> Bool {
+        guard worker.refreshHealth(), let activation = bridge.prepareActivation() else { return false }
+        return state.activateProtection(activation)
+    }
+
     public func withProtection(_ body: () -> Void) { state.withProtection(body) }
 
     /// Одноразовый endpoint готовится после capture reservation, до selection. Payload остаётся у Session.
@@ -52,6 +65,13 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
               !bridge.owns(senderPID: Int64(filter.senderProcessID), marker: filter.downMarker),
               !bridge.owns(senderPID: Int64(filter.senderProcessID), marker: filter.releaseMarker) else { return false }
         return state.captureEndpoint.bind(router: router, filter: filter, scope: bridge.capturedScope)
+    }
+
+    /// Scope проверяется до публикации. Этот endpoint обслуживает только выбранный per-PID worker.
+    @MainActor
+    func bindRecipientInput(router: RecoveryCaptureRouter) -> Bool {
+        guard !Task.isCancelled, state.permitsMutation else { return false }
+        return state.captureEndpoint.bindRecipientInput(router: router, scope: bridge.capturedScope)
     }
 
     public func closeGeneration() { bridge.closeGeneration() }

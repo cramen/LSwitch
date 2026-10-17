@@ -30,12 +30,12 @@ protocol ConversionRecoveryAdapter: AnyObject {
     func activateCapture() -> Bool
     func beginMutation() -> Bool
     func drainPendingInput() async
-    /// Закрывает capture и подготавливает маршрут без передачи владения или post.
+    /// Только preflight: capture остаётся открытым до атомарного принятия очереди.
     func prepareOrdinary() -> Bool
     /// Отказ допустим только ДО claim. После claim transport обязан принять очередь ровно один раз.
     func commitOrdinary(
         correction: ConversionRecoveryLayoutTransition?, claimOwnership: () -> ConversionSafetyInputClaim?
-    ) -> Bool
+    ) -> ConversionOrdinaryAcceptance
     /// nil claim означает сохранение прежнего владельца, а не выдуманный recovery claim после ordinary decision.
     func retainForRecovery(claim: ConversionSafetyInputClaim?)
 }
@@ -45,4 +45,4 @@ struct ConversionRecoveryPreparation {
     let decision: ConversionSafetyDecision
 }
 
-enum ConversionRecoveryCompletion { case ordinaryTransferred, retained, alreadyFinalized }
+enum ConversionRecoveryCompletion { case transportAccepted, ordinaryTransferred, retained, alreadyFinalized }

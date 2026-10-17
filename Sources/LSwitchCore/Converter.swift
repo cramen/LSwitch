@@ -6,7 +6,7 @@ public final class Converter {
     public typealias ContextCheck = @MainActor @Sendable () -> Bool
     public typealias ContextCapture = @MainActor () -> ContextCheck?
     /// nil допустим только до захвата ввода. Начатая очередь обязана вернуться с удерживающей её Session.
-    public typealias RecoverySessionFactory = @MainActor (ConversionRecoveryContext) -> ConversionRecoverySession?
+    public typealias RecoverySessionFactory = @MainActor (ConversionRecoveryContext) async -> ConversionRecoverySession?
 
     let currentLayout: () -> Layout?
     let switchLayout: (Layout) -> Bool
@@ -141,9 +141,7 @@ public final class Converter {
         trace.finish(outcome)
         return outcome
     }
-
 }
-
 extension Converter {
     private func trigger(
         expectedWord: String?, trailingText: String, allowUndo: Bool,
@@ -169,9 +167,11 @@ extension Converter {
             return .unsupportedLayout
         }
         if let factory = recoverySessionFactory {
-            return await runTracked(factory: factory, check: check, bundleID: bundleID, layout: layout,
-                                    expectedWord: expectedWord, trailingText: trailingText,
-                                    allowUndo: allowUndo, diagnostics: diagnostics)
+            let scope = ConverterTrackedScope(
+                bundleID: bundleID, layout: layout, check: check, diagnostics: diagnostics)
+            let input = ConverterTrackedInput(
+                expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo)
+            return await runTracked(factory: factory, scope: scope, input: input)
         }
         isBusy = true
         defer {
@@ -201,9 +201,9 @@ extension Converter {
     }
 
     private func runTracked(
-        factory: RecoverySessionFactory, check: @escaping ContextCheck, bundleID: String, layout: Layout,
-        expectedWord: String?, trailingText: String, allowUndo: Bool, diagnostics: ConversionDiagnostics
+        factory: RecoverySessionFactory, scope: ConverterTrackedScope, input: ConverterTrackedInput
     ) async -> Outcome {
+        let diagnostics = scope.diagnostics
         isBusy = true
         defer { isBusy = false }
         guard let owner = recoveryOwner, let admission = owner.reserve() else {
@@ -213,13 +213,13 @@ extension Converter {
         defer { owner.finishInvocation(admission) }
         let started = revision
         let context = ConversionRecoveryContext(
-            bundleID: bundleID, sourceLayout: layout, generation: started,
+            bundleID: scope.bundleID, sourceLayout: scope.layout, generation: started,
             startedAt: DispatchTime.now().uptimeNanoseconds, admission: admission,
             isCurrent: { [weak self] in
-                self?.revision == started && self?.frontmostBundleID() == bundleID && check()
-            }, canCleanup: { [weak self] in self?.frontmostBundleID() == bundleID && check() }
+                self?.revision == started && self?.frontmostBundleID() == scope.bundleID && scope.check()
+            }, canCleanup: { [weak self] in self?.frontmostBundleID() == scope.bundleID && scope.check() }
         )
-        guard let session = factory(context) else {
+        guard let session = await factory(context) else {
             if let pending = owner.session(for: admission) {
                 pending.retainIfUnfinished()
                 return .recoveryRequired
@@ -237,9 +237,8 @@ extension Converter {
             session.retainIfUnfinished()
             if !session.requiresRecovery { retainedRecoverySession = nil }
         }
-        guard session.matches(context) else { return .recoveryRequired }
-        return await trackedConversion(expectedWord: expectedWord, trailingText: trailingText, allowUndo: allowUndo,
-                                       context: context, session: session, diagnostics: diagnostics)
+        guard session.matches(context), session.isValid else { return .recoveryRequired }
+        return await trackedConversion(input: input, context: context, session: session, diagnostics: diagnostics)
     }
 
     func cacheTrackedMode(_ mechanism: ConversionDiagnostics.Mechanism, bundleID: String) {

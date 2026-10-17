@@ -133,6 +133,7 @@ public final class AXTextConverter: ConversionEngine {
         let execution = await execute(request, transform: transform, mutation: mutation)
         switch execution.result {
         case .success: break
+        case .unavailable where mutation.permitsNoWorkResult: break
         default: mutation.failProfile(.snapshotMismatch)
         }
         mutation.finishEvidence()
@@ -168,11 +169,14 @@ public final class AXTextConverter: ConversionEngine {
         guard mutation.bind(to: element) else {
             return (logged(.blocked, reason: "receiver-contract-unavailable"), false)
         }
-        let initial = initialState(in: element, mutation: mutation)
-        guard let initial,
-              let plan = AXReplacementPlan(text: initial.text, selection: initial.selection,
-                                           request: request, transform: transform)
-        else { return (logged(.unavailable, reason: "snapshot-or-plan-unavailable"), false) }
+        guard let initial = initialState(in: element, mutation: mutation) else {
+            return (logged(.unavailable, reason: "snapshot-or-plan-unavailable"), false)
+        }
+        guard let plan = AXReplacementPlan(text: initial.text, selection: initial.selection,
+                                           request: request, transform: transform) else {
+            let reason = mutation.observeNoWork(initial) ? "no-word-observed" : "snapshot-or-plan-unavailable"
+            return (logged(.unavailable, reason: reason), false)
+        }
         guard request.permitsAutomaticContext(context, plan: plan), isCurrent(element, request: request) else {
             return (logged(.blocked, reason: "automatic-context-not-permitted"), plan.wasSelection)
         }

@@ -18,6 +18,11 @@ struct IsolationChildMessage: Sendable {
     let active: Bool
     let focused: Bool
     let reason: String?
+    let matrixArmed: Bool
+    let matrixLocal: [String: Int]
+    let matrixDispatch: [String: Int]
+    let matrixShortcut: [String: Bool]
+    let matrixEditor: [String: Bool]
 }
 
 struct IsolationChildMailboxSnapshot: Sendable {
@@ -47,12 +52,18 @@ private struct IsolationChildWireReply: Decodable {
     let active: Bool
     let focused: Bool
     let reason: String?
+    let matrixArmed: Bool?
+    let matrixLocal: [String: Int]?
+    let matrixDispatch: [String: Int]?
+    let matrixShortcut: [String: Bool]?
+    let matrixEditor: [String: Bool]?
 
     enum CodingKeys: String, CodingKey {
         case version = "v"
         case nonce, sequence, kind, pid, senderPID, windowTitle, fixtureTextUnchanged, fixtureSelectionUnchanged
         case controlTextMatches, controlSelectionMatches
         case received, changeCount, foreignInput, overflow, active, focused, reason
+        case matrixArmed, matrixLocal, matrixDispatch, matrixShortcut, matrixEditor
     }
 }
 
@@ -136,17 +147,41 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
         guard let reply = try? JSONDecoder().decode(IsolationChildWireReply.self, from: data),
               reply.version == 1, reply.nonce == nonce, reply.pid == target, reply.senderPID == sender,
               (0...32).contains(reply.sequence), reply.changeCount >= 0,
-              ["ready", "configured", "selected", "snapshot", "exiting"].contains(reply.kind),
+              ["ready", "configured", "selected", "matrix_armed", "snapshot", "exiting"].contains(reply.kind),
               reply.received.count <= RecoveryIsolationWire.maximumObservations,
-              reply.received.allSatisfy({ RecoveryIsolationLabel(rawValue: $0) != nil }) else { return nil }
+              reply.received.allSatisfy({ RecoveryIsolationLabel(rawValue: $0) != nil }), validMatrix(reply) else {
+            return nil
+        }
         return .init(
             sequence: reply.sequence, kind: reply.kind, processID: target, windowTitle: reply.windowTitle,
             fixtureTextUnchanged: reply.fixtureTextUnchanged,
             fixtureSelectionUnchanged: reply.fixtureSelectionUnchanged,
             controlTextMatches: reply.controlTextMatches, controlSelectionMatches: reply.controlSelectionMatches,
             received: reply.received, changeCount: reply.changeCount, foreignInput: reply.foreignInput,
-            overflow: reply.overflow, active: reply.active, focused: reply.focused, reason: reply.reason
+            overflow: reply.overflow, active: reply.active, focused: reply.focused, reason: reply.reason,
+            matrixArmed: reply.matrixArmed ?? false, matrixLocal: reply.matrixLocal ?? [:],
+            matrixDispatch: reply.matrixDispatch ?? [:], matrixShortcut: reply.matrixShortcut ?? [:],
+            matrixEditor: reply.matrixEditor ?? [:]
         )
+    }
+
+    private func validMatrix(_ reply: IsolationChildWireReply) -> Bool {
+        let local = reply.matrixLocal ?? [:]
+        let dispatched = reply.matrixDispatch ?? [:]
+        let shortcut = reply.matrixShortcut ?? [:]
+        let editor = reply.matrixEditor ?? [:]
+        guard RecoveryIsolationMatrixState.validCounts(local: local, dispatched: dispatched) else { return false }
+        if !shortcut.isEmpty {
+            guard Set(shortcut.keys) == ["observed", "command", "charactersA", "ignoringModifiersA"],
+                  shortcut["observed"] == true else { return false }
+        }
+        if !editor.isEmpty {
+            guard Set(editor.keys) == ["editable", "selectable", "targetIsEditor", "menuEnabled"],
+                  reply.active, reply.focused else { return false }
+        }
+        if reply.matrixArmed == true { return true }
+        return reply.kind != "matrix_armed" && local.isEmpty && dispatched.isEmpty
+            && shortcut.isEmpty && editor.isEmpty
     }
 }
 #endif

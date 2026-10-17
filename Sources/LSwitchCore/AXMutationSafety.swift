@@ -15,6 +15,7 @@ final class AXMutationSafety {
     private let profile: AXObservationProfile?
     private var binding: AXBoundReceiverContract?
     private var pending: [ConversionSafetySubmissionToken: AXWriteReply] = [:]
+    private var noWorkObserved = false
     private(set) var attempted = false
     private(set) var cleanup: ConversionSafetyCleanupEvidence = .noOwnedMutation
 
@@ -25,6 +26,26 @@ final class AXMutationSafety {
     }
 
     var isProfileMode: Bool { request.safetyLedger?.profileBinding != nil }
+
+    var permitsNoWorkResult: Bool {
+        noWorkObserved && !attempted && !Task.isCancelled && request.safetyLedger?.submissionCount == 0
+            && request.safetyLedger?.hasProfileFault == false && request.safetyLedger?.encounteredUnknown == false
+            && request.safetyLedger?.decision == nil
+    }
+
+    /// Единственное исключение из blanket fault: подтверждённое отсутствие слова в ручном запросе.
+    func observeNoWork(_ snapshot: SelectionSettlement.State) -> Bool {
+        guard isProfileMode, request.useSelection, request.expectedWord == nil, request.replacement == nil,
+              snapshot.selection.length == 0, let cursor = Range(snapshot.selection, in: snapshot.text)?.lowerBound,
+              WordBoundary.lastWord(in: snapshot.text, beforeCursor: cursor) == nil,
+              !attempted, let ledger = request.safetyLedger, ledger.submissionCount == 0,
+              !ledger.hasProfileFault, !ledger.encounteredUnknown, ledger.decision == nil,
+              profileRead(.init(snapshot.text, snapshot.selection)) != nil,
+              !attempted, ledger.submissionCount == 0, !ledger.hasProfileFault,
+              !ledger.encounteredUnknown, ledger.decision == nil, !Task.isCancelled else { return false }
+        noWorkObserved = true
+        return true
+    }
 
     func bind(to element: AXUIElement) -> Bool {
         guard let ledger = request.safetyLedger else { return profile == nil }

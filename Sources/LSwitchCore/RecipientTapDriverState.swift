@@ -12,6 +12,7 @@ public enum RecipientTapDriverObservation: String, Equatable, Sendable {
     case ownDownAtTail, ownReleaseAtTail, unmatchedDownAllowed, unmatchedDownBlocked
     case unmatchedDownAtTail, unmatchedReleaseAtTail
     case fixtureDownSuppressed, fixtureReleaseSuppressed
+    case targetInputAllowed, targetInputBlocked, targetInputAtTail, captureSuppressed
 }
 
 /// Только ограниченные метаданные. Enabled-поля — последний health sample, не новый системный запрос.
@@ -28,6 +29,9 @@ public struct RecipientTapDriverSnapshot: Sendable {
     public let tailObserved: Int
     public let disableNotifications: Int
     public let fixtureSuppressed: Int
+    public let captureSuppressed: Int
+    public let mouseButtonsReleased: Bool
+    public let eventCounters: RecipientEventCounters
     public let observationsTruncated: Bool
     public let observations: [RecipientTapDriverObservation]
 }
@@ -48,6 +52,14 @@ final class RecipientTapDriverState: @unchecked Sendable {
     private var tailObserved = 0
     private var disableNotifications = 0
     private var fixtureSuppressed = 0
+    private var captureSuppressed = 0
+    private var mouseButtonsReleased = true
+    private var forwardedButtons = Set<Int>()
+    private var forwardedModifiers: CGEventFlags = []
+    private var eventAllowed = [Int](repeating: 0, count: RecipientEventKind.allCases.count)
+    private var eventBlocked = [Int](repeating: 0, count: RecipientEventKind.allCases.count)
+    private var eventTail = [Int](repeating: 0, count: RecipientEventKind.allCases.count)
+    private var eventCaptured = [Int](repeating: 0, count: RecipientEventKind.allCases.count)
     private var truncated = false
     private var observations: [RecipientTapDriverObservation] = []
 
@@ -95,6 +107,30 @@ final class RecipientTapDriverState: @unchecked Sendable {
         return healthyLocked
     }
 
+    func recordPhysicalButtons(released: Bool) {
+        lock.lock()
+        mouseButtonsReleased = released
+        lock.unlock()
+    }
+
+    var canArmProtection: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return healthyLocked && mouseButtonsReleased && forwardedButtons.isEmpty && bridge.snapshot.phase == "prepared"
+    }
+
+    /// Identity preflight уже завершён снаружи. Проверка down-состояния и activation неделимы для callback.
+    func activateProtection(_ activation: RecoveryRecipientActivation) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard bridge.ownsActivation(activation) else { return false }
+        guard healthyLocked, mouseButtonsReleased, forwardedButtons.isEmpty else {
+            activation.cancel()
+            return false
+        }
+        return bridge.commitActivation(activation)
+    }
+
     var isProtectionAvailable: Bool {
         lock.lock()
         defer { lock.unlock() }
@@ -105,7 +141,8 @@ final class RecipientTapDriverState: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         let current = bridge.snapshot
-        return healthyLocked && current.protectionAvailable && current.phase == "protected"
+        return healthyLocked && mouseButtonsReleased && forwardedButtons.isEmpty
+            && current.protectionAvailable && current.phase == "protected"
             && !current.handoverRequested
     }
 
@@ -120,7 +157,7 @@ final class RecipientTapDriverState: @unchecked Sendable {
     /// Только явный fixture endpoint может читать payload. Его admission не вызывается под state lock.
     func observe(type: CGEventType, event: CGEvent, isHead: Bool) -> Bool {
         if isHead, captureEndpoint.route(type: type, event: event) == .suppress {
-            recordFixtureSuppression(type: type)
+            recordCaptureSuppression(type: type)
             return false
         }
         lock.lock()
@@ -131,22 +168,21 @@ final class RecipientTapDriverState: @unchecked Sendable {
             markLostLocked(.tapDisabled)
             return true
         }
-        guard type == .keyDown || type == .keyUp else { return true }
+        guard let kind = RecipientEventKind(eventType: type) else { return true }
         let sender = event.getIntegerValueField(.eventSourceUnixProcessID)
         let marker = event.getIntegerValueField(.eventSourceUserData)
         let owned = bridge.owns(senderPID: sender, marker: marker)
         guard isHead else {
             tailObserved = increment(tailObserved)
-            recordTailLocked(owned: owned, isDown: type == .keyDown)
+            Self.incrementKind(kind, in: &eventTail)
+            if type == .keyDown || type == .keyUp { recordTailLocked(owned: owned, isDown: type == .keyDown) } else {
+                appendLocked(.targetInputAtTail)
+            }
             return true
         }
-        if owned { return observeOwnedLocked(event, sender: sender, marker: marker) }
-        guard type == .keyDown else { headAllowed = increment(headAllowed); return true }
-        let decision = bridge.observeUnmatchedTargetDown()
-        recordHeadLocked(decision.allowsEvent, observation: decision.allowsEvent
-                         ? .unmatchedDownAllowed : .unmatchedDownBlocked)
-        bridge.recordCallbackReturn(decision, returnedNil: !decision.allowsEvent)
-        return decision.allowsEvent
+        let allowed = observeHeadLocked(kind, event: event, owned: owned, sender: sender, marker: marker)
+        if allowed { Self.incrementKind(kind, in: &eventAllowed) } else { Self.incrementKind(kind, in: &eventBlocked) }
+        return allowed
     }
 
     var snapshot: RecipientTapDriverSnapshot {
@@ -155,21 +191,73 @@ final class RecipientTapDriverState: @unchecked Sendable {
         let current = bridge.snapshot
         return .init(workerRunning: running, headEnabled: headEnabled, tailEnabled: tailEnabled,
                      protectionAvailable: healthyLocked && current.protectionAvailable,
-                     permitsMutation: healthyLocked && current.protectionAvailable
+                     permitsMutation: healthyLocked && mouseButtonsReleased && forwardedButtons.isEmpty
+                        && current.protectionAvailable
                         && current.phase == "protected" && !current.handoverRequested,
                      cleanupCompleted: cleaned, loss: loss, headAllowed: headAllowed, headBlocked: headBlocked,
                      tailObserved: tailObserved, disableNotifications: disableNotifications,
                      fixtureSuppressed: fixtureSuppressed,
+                     captureSuppressed: captureSuppressed, mouseButtonsReleased: mouseButtonsReleased,
+                     eventCounters: .init(allowed: eventAllowed, blocked: eventBlocked,
+                                          tail: eventTail, captured: eventCaptured),
                      observationsTruncated: truncated, observations: observations)
     }
 
     private var healthyLocked: Bool { running && headEnabled && tailEnabled && loss == nil && !cleaned }
 
-    private func recordFixtureSuppression(type: CGEventType) {
+    private func recordCaptureSuppression(type: CGEventType) {
         lock.lock()
         defer { lock.unlock() }
-        fixtureSuppressed = increment(fixtureSuppressed)
-        appendLocked(type == .keyDown ? .fixtureDownSuppressed : .fixtureReleaseSuppressed)
+        captureSuppressed = increment(captureSuppressed)
+        if let kind = RecipientEventKind(eventType: type) { Self.incrementKind(kind, in: &eventCaptured) }
+        if captureEndpoint.isFixtureBinding {
+            fixtureSuppressed = increment(fixtureSuppressed)
+            appendLocked(type == .keyDown ? .fixtureDownSuppressed : .fixtureReleaseSuppressed)
+        } else { appendLocked(.captureSuppressed) }
+    }
+
+    private func observeHeadLocked(
+        _ kind: RecipientEventKind, event: CGEvent, owned: Bool, sender: Int64, marker: Int64
+    ) -> Bool {
+        if owned { return observeOwnedLocked(event, sender: sender, marker: marker) }
+        let button = kind.mouseButton == nil ? nil
+            : kind.checkedButtonNumber(event.getIntegerValueField(.mouseEventButtonNumber))
+        guard kind.mouseButton == nil || button != nil else {
+            markLostLocked(.eventShapeMismatch)
+            recordHeadLocked(false, observation: .targetInputBlocked)
+            return false
+        }
+        if kind == .keyRelease { headAllowed = increment(headAllowed); return true }
+        if kind == .modifierChange, RecipientModifierChange.isClearing(
+            keyCode: event.getIntegerValueField(.keyboardEventKeycode),
+            flags: event.flags, forwarded: forwardedModifiers
+        ) {
+            forwardedModifiers = RecipientModifierChange.tracked(event.flags)
+            recordHeadLocked(true, observation: .targetInputAllowed)
+            return true
+        }
+        let decision = bridge.observeUnmatchedTargetDown()
+        if decision.allowsEvent { recordForwardedState(kind, event: event, button: button) }
+        let allowed: RecipientTapDriverObservation = kind == .keyDown ? .unmatchedDownAllowed : .targetInputAllowed
+        let blocked: RecipientTapDriverObservation = kind == .keyDown ? .unmatchedDownBlocked : .targetInputBlocked
+        recordHeadLocked(decision.allowsEvent, observation: decision.allowsEvent ? allowed : blocked)
+        bridge.recordCallbackReturn(decision, returnedNil: !decision.allowsEvent)
+        return decision.allowsEvent
+    }
+
+    private func recordForwardedState(_ kind: RecipientEventKind, event: CGEvent, button: Int?) {
+        if kind == .modifierChange {
+            forwardedModifiers = RecipientModifierChange.tracked(event.flags)
+        }
+        if let button {
+            if kind.isMouseDown { forwardedButtons.insert(button) }
+            if kind.isMouseRelease { forwardedButtons.remove(button) }
+        }
+    }
+
+    private static func incrementKind(_ kind: RecipientEventKind, in counts: inout [Int]) {
+        guard let index = RecipientEventKind.allCases.firstIndex(of: kind) else { return }
+        counts[index] = min(counts[index] + 1, maximumObservations)
     }
 
     private func observeOwnedLocked(_ event: CGEvent, sender: Int64, marker: Int64) -> Bool {

@@ -22,6 +22,9 @@ jobs:
       - name: Test
         run: swift test
 
+      - name: Recovery protocol checks
+        run: make DEVELOPER_DIR="$(xcode-select -p)" check-recovery-protocol
+
       - name: SwiftLint
         run: |
           brew install swiftlint

@@ -17,9 +17,13 @@ final class RecoveryIsolationChildProcess {
     var isRunning: Bool { started && process.isRunning }
     var exitStatus: Int32? { started && !process.isRunning ? process.terminationStatus : nil }
 
-    func start() -> Bool {
-        guard !started, let executable = Bundle.main.executableURL,
+    func start(matrixHelper: Bool = false) -> Bool {
+        guard !started, let mainExecutable = Bundle.main.executableURL,
               Bundle.main.bundleIdentifier == "ru.cramen.lswitch" else { return false }
+        let executable = matrixHelper ? Bundle.main.bundleURL.appendingPathComponent(
+            "Contents/Helpers/LSwitch Event Receiver.app/Contents/MacOS/LSwitchReceiver"
+        ) : mainExecutable
+        guard FileManager.default.isExecutableFile(atPath: executable.path) else { return false }
         let commandPipe = Pipe()
         let responsePipe = Pipe()
         let errorPipe = Pipe()
@@ -79,6 +83,12 @@ final class RecoveryIsolationChildProcess {
     func terminateIfRunning() {
         closeInput()
         if isRunning { process.terminate() }
+    }
+
+    /// Последний bounded cleanup только собственного пустого fixture-процесса после отказа SIGTERM.
+    func forceTerminateIfRunning() {
+        closeInput()
+        if isRunning, processID > 0 { _ = Darwin.kill(processID, SIGKILL) }
     }
 
     private nonisolated static func readResponses(_ handle: FileHandle, mailbox: RecoveryIsolationChildMailbox) {

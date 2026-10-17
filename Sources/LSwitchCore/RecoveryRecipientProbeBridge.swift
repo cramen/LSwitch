@@ -68,8 +68,26 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
     /// App вызывает только после создания и проверки собственных head/tail taps; это не production prearm.
     @MainActor
     public func activateProtection() -> Bool {
-        guard identitiesAreCurrent else { markLost(); return false }
-        guard gate.activateProtection(scope: scope) else { return false }
+        guard let activation = prepareActivation() else { return false }
+        return commitActivation(activation)
+    }
+
+    @MainActor
+    func prepareActivation() -> RecoveryRecipientActivation? {
+        guard identitiesAreCurrent else { markLost(); return nil }
+        guard gate.snapshot.phase == .prepared else { return nil }
+        return RecoveryRecipientActivation(owner: owner, scope: scope)
+    }
+
+    func ownsActivation(_ activation: RecoveryRecipientActivation) -> Bool {
+        activation.owner == owner && activation.scope == scope
+    }
+
+    /// Только pure RAM commit: вызывается driver под тем же lock, что и admission реальных mouse events.
+    func commitActivation(_ activation: RecoveryRecipientActivation) -> Bool {
+        guard activation.consume(owner: owner, scope: scope), gate.activateProtection(scope: scope) else {
+            return false
+        }
         observations.recordProtectionStarted()
         return true
     }
@@ -260,5 +278,25 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
         case .lost: return "lost"
         }
     }
+}
+
+/// Одноразовая подготовка после MainActor identity-check. Не содержит payload и не является runtime permit.
+final class RecoveryRecipientActivation: @unchecked Sendable {
+    fileprivate let owner: UUID
+    fileprivate let scope: RecoveryOperationTarget
+    private let lock = NSLock()
+    private var consumed = false
+
+    fileprivate init(owner: UUID, scope: RecoveryOperationTarget) { self.owner = owner; self.scope = scope }
+
+    fileprivate func consume(owner: UUID, scope: RecoveryOperationTarget) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !consumed, self.owner == owner, self.scope == scope else { return false }
+        consumed = true
+        return true
+    }
+
+    func cancel() { lock.lock(); consumed = true; lock.unlock() }
 }
 #endif

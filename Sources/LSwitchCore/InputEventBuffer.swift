@@ -76,9 +76,21 @@ final class InputEventBuffer: @unchecked Sendable {
 
     /// true означает, что исходный callback возвращает nil: объект сохранён для ровно одной доставки.
     func intercept(type: CGEventType, event: CGEvent, at now: UInt64) -> Bool {
+        intercept(type: type, event: event, at: now, legacyPolicy: true)
+    }
+
+    /// Scoped port уже проверил own-marker registry. Общая magic-константа не доказывает происхождение.
+    func captureAuthorized(_ event: CGEvent, at now: UInt64) -> Bool {
+        intercept(type: event.type, event: event, at: now, legacyPolicy: false)
+    }
+
+    private func intercept(
+        type: CGEventType, event: CGEvent, at now: UInt64, legacyPolicy: Bool
+    ) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard let deadline, Self.canHold(type), !SyntheticEventMarker.isSynthetic(event) else { return false }
+        guard let deadline, Self.canHold(type),
+              !legacyPolicy || (type != .scrollWheel && !SyntheticEventMarker.isSynthetic(event)) else { return false }
         if now >= deadline { leaseValid = false }
         // При невозможности копии удерживаем сам объект: ARC сохраняет его после callback.
         held.append(event.copy() ?? event)
@@ -138,7 +150,7 @@ final class InputEventBuffer: @unchecked Sendable {
         case .keyDown, .keyUp, .flagsChanged,
              .leftMouseDown, .leftMouseUp, .leftMouseDragged,
              .rightMouseDown, .rightMouseUp, .rightMouseDragged,
-             .otherMouseDown, .otherMouseUp, .otherMouseDragged:
+             .otherMouseDown, .otherMouseUp, .otherMouseDragged, .scrollWheel:
             return true
         default:
             return false

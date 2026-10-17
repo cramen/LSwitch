@@ -44,17 +44,6 @@ struct ConversionSafetyProfileObservation: Equatable, Sendable {
     let step: ConversionSafetyProfileStep
     fileprivate let binding: ConversionSafetyProfileBinding
     fileprivate let revision: UInt64
-
-    fileprivate init(
-        operation: ConversionSafetyOperationToken, submission: ConversionSafetySubmissionToken?,
-        step: ConversionSafetyProfileStep, binding: ConversionSafetyProfileBinding, revision: UInt64
-    ) {
-        self.operation = operation
-        self.submission = submission
-        self.step = step
-        self.binding = binding
-        self.revision = revision
-    }
 }
 
 /// Отдельная revision не позволяет новому cleanup-read случайно выдать старый profile result за свежий.

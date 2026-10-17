@@ -13,6 +13,10 @@ final class RecipientCaptureProtection: RecoveryIsolationProtecting, @unchecked 
     var permitsMutation: Bool { state.permitsMutation }
 
     init(state: RecipientTapDriverState) { self.state = state }
+    @MainActor func activateProtection() -> Bool {
+        guard let activation = bridge.prepareActivation() else { return false }
+        return state.activateProtection(activation)
+    }
     @MainActor func refreshProtection() -> Bool { state.isProtectionAvailable }
     func withProtection(_ body: () -> Void) { state.withProtection(body) }
 }

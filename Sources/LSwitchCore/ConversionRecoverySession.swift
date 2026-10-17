@@ -8,13 +8,17 @@ public final class ConversionRecoverySession {
     public let allowedMechanisms: [ConversionDiagnostics.Mechanism]
     public private(set) var requiresRecovery = false
     public private(set) var ordinaryOwnershipUnconfirmed = false
+    public private(set) var ordinaryTransportRetained = false
     private let context: ConversionRecoveryContext
     private let adapter: any ConversionRecoveryAdapter
     private let identifier = UUID()
     private var preparation: ConversionRecoveryPreparation?
     private var claim: ConversionSafetyInputClaim?
+    private var transport: ConversionOrdinaryTransport?
+    private var awaitingTransport = false
+    private var retentionRequestedDuringCommit = false
     private var phase = Phase.active
-    private enum Phase { case active, preparing, prepared, committing, ordinaryTransferred, retained }
+    private enum Phase { case active, preparing, prepared, committing, transportPending, ordinaryTransferred, retained }
 
     init?(
         context: ConversionRecoveryContext, ledger: ConversionSafetyLedger,
@@ -28,6 +32,7 @@ public final class ConversionRecoverySession {
         self.ledger = ledger
         self.allowedMechanisms = allowedMechanisms
         self.adapter = adapter
+        guard context.isCurrent(), !Task.isCancelled else { return nil }
         guard context.admission.register(self) else { return nil }
         if !adapter.activateCapture() { retainIfUnfinished() }
     }
@@ -37,6 +42,7 @@ public final class ConversionRecoverySession {
     }
 
     var ordinaryTransferred: Bool { phase == .ordinaryTransferred }
+    public var isTransportPending: Bool { phase == .transportPending }
 
     var isValid: Bool {
         guard phase == .active else { return false }
@@ -109,24 +115,51 @@ public final class ConversionRecoverySession {
             return .retained
         }
         phase = .committing
-        let accepted = adapter.commitOrdinary(correction: correction) { [self] in
-            guard phase == .committing, claim == nil, adapter.isOrdinaryRouteCurrent, context.isCurrent(),
-                  phase == .committing, claim == nil,
+        let acceptance = adapter.commitOrdinary(correction: correction) { [self] in
+            // Transport может держать короткий RAM lock: никаких внешних callbacks внутри claim.
+            guard phase == .committing, claim == nil, preparation?.session == expected.session,
+                  preparation?.decision == expected.decision,
                   ledger.currentInputDisposition == .replayAuthorized, !Task.isCancelled else { return nil }
             claim = ledger.claimInput(operation: ledger.operation)
             return claim
         }
-        guard accepted, claim?.owner == .ordinaryDelivery else {
-            ordinaryOwnershipUnconfirmed = accepted || claim != nil
+        guard case .accepted(let accepted) = acceptance else {
+            ordinaryOwnershipUnconfirmed = claim?.owner == .ordinaryDelivery
             retainIfUnfinished()
             return .retained
         }
-        // Accepted ownership необратим: последующая смена контекста не возвращает уже переданную очередь.
-        phase = .ordinaryTransferred
+        transport = accepted
+        guard claim?.owner == .ordinaryDelivery else {
+            ordinaryOwnershipUnconfirmed = true
+            accepted.requestRetention()
+            retainIfUnfinished()
+            return .retained
+        }
+        // Accepted ownership необратим, но ещё не означает локальную доставку.
+        phase = .transportPending
+        if retentionRequestedDuringCommit { accepted.requestRetention() }
         requiresRecovery = false
         ordinaryOwnershipUnconfirmed = false
         preparation = nil
-        return .ordinaryTransferred
+        return .transportAccepted
+    }
+
+    func awaitOrdinaryCompletion() async -> ConversionRecoveryCompletion {
+        guard phase == .transportPending, !awaitingTransport, let transport else { return .alreadyFinalized }
+        awaitingTransport = true
+        let result = await transport.waitForTerminal()
+        awaitingTransport = false
+        // После claim контекст не отменяет уже состоявшуюся доставку. Будущий undo проверяет свой target.
+        if result == .locallyDispatched {
+            phase = .ordinaryTransferred
+            requiresRecovery = false
+            return .ordinaryTransferred
+        }
+        phase = .retained
+        requiresRecovery = true
+        ordinaryTransportRetained = result == .retainedFailure
+        ordinaryOwnershipUnconfirmed = result == nil
+        return .retained
     }
 
     /// Любой незавершённый путь сохраняет adapter/его очередь у Session. Старый endInputHold не вызывается.
@@ -136,6 +169,14 @@ public final class ConversionRecoverySession {
             phase = .retained
             requiresRecovery = true
             preparation = nil
+            return
+        }
+        if phase == .committing, claim?.owner == .ordinaryDelivery {
+            retentionRequestedDuringCommit = true
+            return
+        }
+        if phase == .transportPending {
+            transport?.requestRetention()
             return
         }
         if ledger.decision == nil {

@@ -3,7 +3,7 @@ import CoreFoundation
 import Foundation
 
 enum RecoveryIsolationCommand: String, Sendable {
-    case handshake, configure, selectFixture, snapshot, quit
+    case handshake, configure, selectFixture, armEventMatrix, snapshot, quit
 }
 
 enum RecoveryIsolationLabel: String, CaseIterable, Sendable {

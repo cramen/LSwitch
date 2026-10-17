@@ -9,7 +9,7 @@ enum RecoveryIsolationReceiver {
         guard arguments.contains(flag) else { return nil }
         #if DEBUG
         guard arguments.filter({ $0 == flag }).count == 1,
-              Bundle.main.bundleIdentifier == "ru.cramen.lswitch",
+              ["ru.cramen.lswitch", "ru.cramen.lswitch.receiverprobe"].contains(Bundle.main.bundleIdentifier ?? ""),
               let nonce = argument("--isolation-nonce=", in: arguments), UUID(uuidString: nonce) != nil,
               let sender = argument("--isolation-sender-pid=", in: arguments),
               let senderPID = Int32(sender), senderPID > 0, senderPID == getppid() else { return 2 }
@@ -36,6 +36,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
     private var channel: RecoveryIsolationPipe?
     private var window: NSWindow?
     private var editor: RecoveryIsolationReceiverView?
+    private var matrixSelectItem: NSMenuItem?
     private var monitor: Any?
     private var timer: Timer?
     private var lastSequence = 0
@@ -43,6 +44,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
     private var selected = false
     private var finished = false
     private var exitStatus: Int32 = 1
+    private let startedAt = DispatchTime.now().uptimeNanoseconds
 
     init(nonce: String, senderPID: Int32) {
         self.nonce = nonce
@@ -55,11 +57,14 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         let application = NSApplication.shared
         let priorDelegate = application.delegate
         let priorPolicy = application.activationPolicy()
+        let priorMenu = application.mainMenu
         application.delegate = self
-        _ = application.setActivationPolicy(.accessory)
+        let helper = Bundle.main.bundleIdentifier == "ru.cramen.lswitch.receiverprobe"
+        _ = application.setActivationPolicy(helper ? .regular : .accessory)
         defer {
             application.delegate = priorDelegate
             _ = application.setActivationPolicy(priorPolicy)
+            application.mainMenu = priorMenu
         }
         let channel = RecoveryIsolationPipe(nonce: nonce, onRequest: { [weak self] request in
             DispatchQueue.main.async { [weak self] in self?.handle(request) }
@@ -68,9 +73,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         })
         self.channel = channel
         guard channel.start() else { return 2 }
-        let timer = Timer(timeInterval: 120, target: self, selector: #selector(timedOut), userInfo: nil, repeats: false)
-        self.timer = timer
-        RunLoop.main.add(timer, forMode: .common)
+        scheduleDeadline(maximumLifetime: 120)
         application.run()
         if !finished { finish("event_loop_stopped") }
         if !channel.closeAfterDraining() { return 1 }
@@ -125,6 +128,12 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             selected = true
             focusFixture()
             reply("selected", sequence: request.sequence)
+        case .armEventMatrix:
+            guard configured, !selected, editor.armEventMatrix() else { return finish("protocol") }
+            installMatrixMenu()
+            scheduleDeadline(maximumLifetime: 600)
+            focusFixture()
+            reply("matrix_armed", sequence: request.sequence)
         case .snapshot:
             reply("snapshot", sequence: request.sequence)
         case .quit:
@@ -154,7 +163,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
 
     private func metadata() -> [String: Any] {
         let focused = window?.isKeyWindow == true && window?.firstResponder === editor
-        return [
+        var result: [String: Any] = [
             "fixtureTextUnchanged": editor?.fixtureTextUnchanged ?? false,
             "fixtureSelectionUnchanged": editor?.fixtureSelectionUnchanged ?? false,
             "controlTextMatches": editor?.controlTextMatches ?? false,
@@ -163,6 +172,57 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             "foreignInput": editor?.foreignInput ?? false, "overflow": editor?.overflow ?? false,
             "active": NSApplication.shared.isActive, "focused": focused
         ]
+        if let editor, editor.matrixArmed {
+            result["matrixArmed"] = true
+            if !editor.matrixLocal.isEmpty { result["matrixLocal"] = editor.matrixLocal }
+            if !editor.matrixDispatch.isEmpty { result["matrixDispatch"] = editor.matrixDispatch }
+            if !editor.matrixShortcut.isEmpty { result["matrixShortcut"] = editor.matrixShortcut }
+            if let state = matrixEditorMetadata() { result["matrixEditor"] = state }
+        }
+        return result
+    }
+
+    /// Только состояния fixture и штатного responder chain; action не выполняется.
+    private func matrixEditorMetadata() -> [String: Bool]? {
+        let application = NSApplication.shared
+        guard let editor, let window, let item = matrixSelectItem,
+              editor.matrixArmed, application.isActive, window.isKeyWindow,
+              window.firstResponder === editor else { return nil }
+        item.menu?.update()
+        guard application.isActive, window.isKeyWindow, window.firstResponder === editor else { return nil }
+        let target = application.target(forAction: #selector(NSText.selectAll(_:)), to: nil, from: item)
+        return [
+            "editable": editor.isEditable, "selectable": editor.isSelectable,
+            "targetIsEditor": (target as AnyObject?) === editor, "menuEnabled": item.isEnabled
+        ]
+    }
+
+    private func scheduleDeadline(maximumLifetime: TimeInterval) {
+        timer?.invalidate()
+        let elapsed = Double(DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000_000
+        let timer = Timer(timeInterval: max(0.001, maximumLifetime - elapsed), target: self,
+                          selector: #selector(timedOut), userInfo: nil, repeats: false)
+        self.timer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func installMatrixMenu() {
+        let menu = NSMenu()
+        let application = NSMenuItem(title: "LSwitch", action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: "LSwitch")
+        let quit = NSMenuItem(title: "Quit LSwitch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        applicationMenu.addItem(quit)
+        application.submenu = applicationMenu
+        menu.addItem(application)
+        let item = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let edit = NSMenu(title: "Edit")
+        let select = NSMenuItem(title: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        select.keyEquivalentModifierMask = .command
+        matrixSelectItem = select
+        edit.addItem(select)
+        item.submenu = edit
+        menu.addItem(item)
+        NSApplication.shared.mainMenu = menu
     }
 
     private func reply(_ kind: String, sequence: Int, includeTitle: Bool = false) {

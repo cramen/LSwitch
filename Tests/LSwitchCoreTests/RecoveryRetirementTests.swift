@@ -43,7 +43,7 @@ final class RecoveryRetirementTests: XCTestCase {
         let fixture = try RecoveryRetirementFixture()
         XCTAssertTrue(fixture.router.beginRetirement(fixture.attachment))
         XCTAssertFalse(fixture.router.matchesCapture(
-            scope: fixture.operation.capturePort.scope.binding.scope, filter: fixture.attachment.filter
+            scope: fixture.operation.capturePort.scope.binding.scope, policy: fixture.attachment.policy
         ))
         XCTAssertEqual(fixture.router.route(type: .keyDown, event: try fixture.event()), .suppress)
         XCTAssertEqual(fixture.router.route(type: .keyUp, event: try fixture.event()), .suppress)

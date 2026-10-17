@@ -14,6 +14,7 @@ final class RecoveryCapturePort: @unchecked Sendable {
     private var batch: HeldInputBatch?
     private var transferred: UUID?
     private weak var transferredCoordinator: RecoveryCoordinator?
+    private var ordinaryCustody: OrdinaryInputCustody?
 
     init(
         scope: RecoveryCaptureScope, buffer: InputEventBuffer,
@@ -36,7 +37,7 @@ final class RecoveryCapturePort: @unchecked Sendable {
         expireLocked(at: now)
         guard stopped == nil else { return .rejected(stopped ?? .closed) }
         let result = admission.admit(utf16Units: utf16Units, binding: scope.binding) {
-            buffer.intercept(type: event.type, event: event, at: now)
+            buffer.captureAuthorized(event, at: now)
         }
         switch result {
         case .accepted: break
@@ -115,6 +116,25 @@ final class RecoveryCapturePort: @unchecked Sendable {
         return batch != nil
     }
 
+    /// Quiescence разрешает только передачу RAM. Native flush и его route permit остаются у transport.
+    func takeOrdinary(
+        claim: ConversionSafetyInputClaim, quiescence: RecoveryRetiredCaptureProof
+    ) -> OrdinaryInputCustody? {
+        guard lock.try() else { return nil }
+        defer { lock.unlock() }
+        guard stopped != nil, transferred == nil, ordinaryCustody == nil, let seal,
+              claim.operation == scope.binding.scope.operation, claim.owner == .ordinaryDelivery,
+              quiescence.consume(scope: scope, seal: seal) else { return nil }
+        if batch == nil { batch = buffer.detach(token: scope.binding.hold) }
+        guard let batch else { return nil }
+        let transfer = OrdinaryCaptureTransfer(scope: scope, seal: seal, claim: claim, batch: batch)
+        guard let custody = OrdinaryInputCustody.take(transfer) else { return nil }
+        self.batch = nil
+        ordinaryCustody = custody
+        transferred = custody.identifier
+        return custody
+    }
+
     /// Конкретный RAM coordinator вызывается без gate lock. Отклонение не изымает private batch.
     @MainActor
     func adopt(
@@ -150,4 +170,26 @@ final class RecoveryCapturePort: @unchecked Sendable {
         admission.stop(reason)
         buffer.cancelLease()
     }
+}
+
+/// Создаётся только этим port после quiescence. Не является вторым ledger claim.
+final class OrdinaryCaptureTransfer {
+    let scope: RecoveryCaptureScope
+    let seal: RecoveryAdmissionSeal
+    let claim: ConversionSafetyInputClaim
+    private let batch: HeldInputBatch
+    var token: InputHoldToken { batch.token }
+    var eventCount: Int { batch.eventCount }
+
+    fileprivate init(
+        scope: RecoveryCaptureScope, seal: RecoveryAdmissionSeal,
+        claim: ConversionSafetyInputClaim, batch: HeldInputBatch
+    ) {
+        self.scope = scope
+        self.seal = seal
+        self.claim = claim
+        self.batch = batch
+    }
+
+    func takeEvents() -> [CGEvent]? { batch.claim() }
 }
