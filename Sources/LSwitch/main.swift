@@ -19,6 +19,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     let settings = SettingsStore()
+    lazy var hotkeySettings: HotkeySettingsController = {
+        let controller = HotkeySettingsController(settings: settings)
+        controller.onChange = { [weak self] in self?.resetInputContext() }
+        return controller
+    }()
     let appRules = AppRules()
     let personalDictionary = PersonalDictionary()
     private let layoutManager = LayoutManager()
@@ -31,7 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         classifier: WordClassifier(personalDictionary: personalDictionary), personalDictionary: personalDictionary
     )
     private let appProfiles = AppProfiles()
-    private var detector = DoubleShiftDetector()
+    private var detector = ConversionHotkeyDetector()
     private var eventTap: EventTapCore?
     private var inputHoldingTap: EventTapCore?
     private let conversions = AppConversionDispatch()
@@ -137,12 +142,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         eventTap = tap
+        hotkeySettings.setActive(true)
         #if DEBUG
         diagnosticsSession?.sample(reason: "tapStarted")
         #endif
     }
 
     private func stopInterception() {
+        hotkeySettings.setActive(false)
         interceptionGeneration &+= 1
         resetInputContext()
         eventTap?.stop()
@@ -155,13 +162,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Callback tap передаёт сюда события на главный поток.
     private func handleIntercepted(_ raw: RawKeyEvent) {
         guard !raw.isSynthetic else { return }
+        let hotkeyResult = detector.handle(raw, hotkey: hotkeySettings.activeHotkey)
         guard settings.enabled, permGuard.current.allGranted, eventTap != nil, raw.type != .other,
               !appRules.isBlocked(bundleID: currentFrontmostBundleID()),
               let target = InputSafety.captureTarget() else {
             resetInputContext()
             return
         }
-        if detector.handle(raw) {
+        if hotkeyResult == .consumed { return }
+        if hotkeyResult == .trigger {
             // Ожидаемое слово из буфера — для точного выделения ⇧←×N
             // в clipboard-режиме (Electron гранулярности не доверяем).
             let word = keystrokeBuffer.lastWord()
@@ -254,7 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func resetInputContext() {
         inputGeneration &+= 1
         keystrokeBuffer.clear()
-        detector = DoubleShiftDetector()
+        detector.resetSequence()
         converter.notifyOtherKeystroke()
         autoSwitch.clearPendingUndoCandidate()
     }

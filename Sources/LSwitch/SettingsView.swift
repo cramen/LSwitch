@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
 
     @ObservedObject var settings: SettingsStore
+    let hotkeys: HotkeySettingsController
     let appRules: AppRules
     @ObservedObject var personalDictionary: PersonalDictionary
 
@@ -15,7 +16,9 @@ struct SettingsView: View {
     @State private var newExceptionWord = ""
     @StateObject private var launchAtLogin: LaunchAtLoginController
 
-    init(settings: SettingsStore, appRules: AppRules, personalDictionary: PersonalDictionary) {
+    init(settings: SettingsStore, appRules: AppRules, personalDictionary: PersonalDictionary,
+         hotkeys: HotkeySettingsController) {
+        self.hotkeys = hotkeys
         self.settings = settings
         self.appRules = appRules
         self.personalDictionary = personalDictionary
@@ -38,12 +41,13 @@ struct SettingsView: View {
                 in: 1...10,
                 step: 1
             )
+            HotkeySettingsView(settings: settings, controller: hotkeys)
             launchAtLoginSection
             dictionarySection
             blockedAppsSection
         }
         .formStyle(.grouped)
-        .frame(width: 420, height: 460)
+        .frame(width: 520, height: 650)
         .onAppear { launchAtLogin.refresh() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             launchAtLogin.refresh()

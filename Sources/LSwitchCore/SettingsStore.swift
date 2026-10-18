@@ -6,6 +6,7 @@ import Foundation
 public final class SettingsStore: ObservableObject {
 
     private enum Key {
+        static let conversionHotkey = "settings.conversionHotkey"
         static let enabled = "settings.enabled"
         static let undoWindowSeconds = "settings.undoWindowSeconds"
         static let soundEnabled = "settings.soundEnabled"
@@ -46,6 +47,13 @@ public final class SettingsStore: ObservableObject {
         }
     }
 
+    @Published public var conversionHotkey: ConversionHotkey {
+        didSet {
+            if !conversionHotkey.isValid { conversionHotkey = .doubleShift }
+            defaults.set(try? JSONEncoder().encode(conversionHotkey), forKey: Key.conversionHotkey)
+        }
+    }
+
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
@@ -58,6 +66,9 @@ public final class SettingsStore: ObservableObject {
             Key.autoSwitchEnabled: false,
             Key.undoLearningThreshold: AutoSwitchCoordinator.defaultLearningThreshold
         ])
+        let saved = defaults.data(forKey: Key.conversionHotkey)
+            .flatMap { try? JSONDecoder().decode(ConversionHotkey.self, from: $0) }
+        conversionHotkey = saved?.isValid == true ? (saved ?? .doubleShift) : .doubleShift
         self.enabled = defaults.bool(forKey: Key.enabled)
         self.undoWindowSeconds = defaults.double(forKey: Key.undoWindowSeconds)
         self.soundEnabled = defaults.bool(forKey: Key.soundEnabled)
