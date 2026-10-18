@@ -83,6 +83,7 @@ final class AppRecoveryPilot {
             "foreground=\(report.foreground.count):\(report.foreground.nanoseconds)",
             "context=\(report.context.count):\(report.context.nanoseconds)",
             "snapshotInclusive=\(report.snapshotInclusive.count):\(report.snapshotInclusive.nanoseconds)",
+            "captured=\(report.capturedEvents):\(report.capturedUTF16Bytes):\(report.payloadCountReads)",
             "profileFault=\(report.profileFault ?? "none")",
             "logicalFailure=\(report.logicalFailure ?? "none")"
         ].joined(separator: " ")

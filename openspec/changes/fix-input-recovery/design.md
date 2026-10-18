@@ -443,6 +443,10 @@ selection в finishWrite, вместо повторного snapshot без пр
 Два stable чтения с 20 мс, max4, cleanup и 400 мс не сокращаются; объединение acceptance
 с самим stable read пока не входит в этот шаг.
 Runtime сохраняет только value snapshot отчёта перед освобождением successful attempt;
+для проверки физического ввода в него входят также captured event/UTF-16 byte/count-read
+счётчики attachment. Чтение этих чисел не читает payload, не пишет flags/keycodes и
+не удерживает adapter после завершения. Счётчики позволяют отличить held input от
+клавиши, поступившей уже после конвертации; сам текст результата проверяется отдельно.
 завершение старого await не перезаписывает статистику новой invocation. Logical failure
 читается по exact lease либо берётся из результата finish, без новых AX/IPC/expiry effects.
 Новая invocation очищает прежнюю статистику; ради диагностики Session/driver не удерживаются.

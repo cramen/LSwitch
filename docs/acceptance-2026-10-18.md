@@ -276,3 +276,25 @@ runner подтвердил `launcherExit 0` и восстановил ordinary 
 не принят на этом стенде; цикл Accessibility не переименовывается в такой тест.
 Тестовая запись удалена через штатный Quit, ordinary восстановлен. Локатор подготовки:
 `.build/recovery-lifecycle-v9-input-monitoring-driver.log`.
+
+## Физический ввод во время преобразования
+
+V10 SHA `321bde3dae0251971505df2e3f178aa9ac2434db181ed2c78009e2f2897614b4`,
+PID 64873; manifest `.build/recovery-physical-v10-manifest.json`. В отчёт добавлены
+только capturedEvents/UTF16Bytes/payloadCountReads, без текста, flags или keycodes.
+1113 тестов прошли без failures/skips. Пользователь выполнил физический ввод в своём
+тестовом TextEdit; агент не отправлял клавиши в этом опыте.
+
+Первый запрос шёл при sourceLayout=ru и не требовал смены TIS. Второй, в 21:59:46,
+подтвердил sourceLayout=en→ru, результат `converted`, captured=3:4:2. Пользователь
+сообщил `приветч`; чтение собственного окна подтвердило тот же текст. Значит физическая
+клавиша действительно попала в удержанную очередь, а не только пришла после завершения;
+исходный текст не затёрт, дублирования символа нет, коррекция раскладки в очереди сработала.
+
+После ordinary completion логический finish отметил `expired`; result остаётся
+converted, RAM recovery не возникла. Это подтверждает доставку в данном опыте, но
+**не закрывает** задержку, обработку logical tail на deadline и всю системную матрицу.
+Лог `.build/recovery-physical-v10-system.log`. Штатный Quit завершил candidate,
+runner подтвердил `launcherExit 0` и восстановил обычный LSwitch; enabled ON, auto OFF,
+sound ON. Пользовательское выделение текста после опыта не выдаётся за final caret
+самой операции.

@@ -20,8 +20,12 @@ public struct TextEditRecoveryProfileReport: Equatable, Sendable {
     public let foreground: TextEditRecoveryTiming
     public let profileFault: String?
     public let logicalFailure: String?
+    public let capturedEvents: Int
+    public let capturedUTF16Bytes: Int
+    public let payloadCountReads: Int
 
-    init(_ report: AXProfileDiagnosticReport, logicalFailure: EventProcessingInvalidation?) {
+    init(_ report: AXProfileDiagnosticReport, logicalFailure: EventProcessingInvalidation?,
+         capture: RecoveryCaptureCounters? = nil) {
         requestIsValid = .init(report.requestIsValid)
         source = .init(report.source)
         protectedField = .init(report.protectedField)
@@ -31,6 +35,9 @@ public struct TextEditRecoveryProfileReport: Equatable, Sendable {
         foreground = .init(report.foreground)
         profileFault = report.profileFault.map(Self.label)
         self.logicalFailure = logicalFailure.map(Self.label)
+        capturedEvents = capture?.capturedEvents ?? 0
+        capturedUTF16Bytes = capture?.capturedUTF16Bytes ?? 0
+        payloadCountReads = capture?.payloadCountReads ?? 0
     }
 
     private static func label(_ reason: ConversionSafetyProfileFault) -> String {
@@ -66,7 +73,8 @@ public struct TextEditRecoveryProfileReport: Equatable, Sendable {
 extension TextEditRecoveryRuntime {
     public var profileReport: TextEditRecoveryProfileReport? {
         guard let attempt, let profile = attempt.profile else { return lastProfileReport }
-        return .init(profile.diagnosticReport, logicalFailure: logicalFailure(attempt))
+        return .init(profile.diagnosticReport, logicalFailure: logicalFailure(attempt),
+                     capture: attempt.adapter?.resources.capture.attachment.counters)
     }
 
     func recordProfileReport(_ expected: TextEditRecoveryAttempt, finish: EventProcessingFinish? = nil) {
@@ -74,7 +82,8 @@ extension TextEditRecoveryRuntime {
               let profile = expected.profile else { return }
         if case .reset(let reason) = finish { expected.logicalFailure = expected.logicalFailure ?? reason }
         expected.logicalFailure = logicalFailure(expected)
-        lastProfileReport = .init(profile.diagnosticReport, logicalFailure: expected.logicalFailure)
+        lastProfileReport = .init(profile.diagnosticReport, logicalFailure: expected.logicalFailure,
+                                  capture: expected.adapter?.resources.capture.attachment.counters)
         lastProfileInvocation = expected.invocation
     }
 
