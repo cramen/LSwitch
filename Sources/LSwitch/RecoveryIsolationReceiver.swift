@@ -1,4 +1,5 @@
 import AppKit
+import Carbon
 import Darwin
 
 /// Ранний режим того же подписанного executable; штатный AppDelegate не создаётся.
@@ -37,6 +38,8 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
     private var window: NSWindow?
     private var editor: RecoveryIsolationReceiverView?
     private var matrixSelectItem: NSMenuItem?
+    private var secureLease: RecoverySecureInputDiagnosticLease?
+    private var secureTimer: Timer?
     private var monitor: Any?
     private var timer: Timer?
     private var lastSequence = 0
@@ -62,6 +65,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         let helper = Bundle.main.bundleIdentifier == "ru.cramen.lswitch.receiverprobe"
         _ = application.setActivationPolicy(helper ? .regular : .accessory)
         defer {
+            stopSecureInput()
             application.delegate = priorDelegate
             _ = application.setActivationPolicy(priorPolicy)
             application.mainMenu = priorMenu
@@ -109,6 +113,37 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         return false
     }
 
+    func applicationDidResignActive(_ notification: Notification) { stopSecureInput() }
+
+    @objc private func secureExpired() { stopSecureInput() }
+
+    private func stopSecureInput() {
+        secureTimer?.invalidate()
+        secureTimer = nil
+        secureLease?.stop()
+    }
+
+    private func configureSecureInput(enabled: Bool, sequence: Int) {
+        guard configured, let editor, !editor.matrixArmed else { return finish("protocol") }
+        if secureLease == nil {
+            secureLease = RecoverySecureInputDiagnosticLease(environment: .init(
+                isEnabled: { IsSecureEventInputEnabled() },
+                enable: { EnableSecureEventInput() == noErr }, disable: { DisableSecureEventInput() == noErr },
+                now: { DispatchTime.now().uptimeNanoseconds }
+            ))
+        }
+        if enabled {
+            let permitted = NSApp.isActive && window?.isKeyWindow == true && window?.firstResponder === editor
+            if secureLease?.begin(permitted: permitted) == true {
+                let timer = Timer(timeInterval: 2, target: self, selector: #selector(secureExpired),
+                                  userInfo: nil, repeats: false)
+                secureTimer = timer
+                RunLoop.main.add(timer, forMode: .common)
+            }
+        } else { stopSecureInput() }
+        reply("secure_input", sequence: sequence)
+    }
+
     @objc private func timedOut() { finish("timeout") }
 
     private func handle(_ request: RecoveryIsolationRequest) {
@@ -129,6 +164,8 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             focusFixture()
             reply("selected", sequence: request.sequence)
         case .armEventMatrix: armMatrix(editor, sequence: request.sequence)
+        case .secureInputOn: configureSecureInput(enabled: true, sequence: request.sequence)
+        case .secureInputOff: configureSecureInput(enabled: false, sequence: request.sequence)
         case .snapshot:
             reply("snapshot", sequence: request.sequence)
         case .quit:
@@ -137,7 +174,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
     }
 
     private func armMatrix(_ editor: RecoveryIsolationReceiverView, sequence: Int) {
-        guard configured, !selected, editor.armEventMatrix() else { return finish("protocol") }
+        guard configured, secureLease == nil, !selected, editor.armEventMatrix() else { return finish("protocol") }
         installMatrixMenu()
         scheduleDeadline(maximumLifetime: 600)
         focusFixture()
@@ -175,7 +212,11 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
             "foreignInput": editor?.foreignInput ?? false, "overflow": editor?.overflow ?? false,
             "active": NSApplication.shared.isActive, "focused": focused
         ]
-        if let editor, editor.matrixArmed {
+        if let secureLease {
+            let secure = secureLease.snapshot
+            result["secure"] = secure.flags
+            result["secureCounts"] = secure.counts
+        } else if let editor, editor.matrixArmed {
             result["matrixArmed"] = true
             if !editor.matrixLocal.isEmpty { result["matrixLocal"] = editor.matrixLocal }
             if !editor.matrixDispatch.isEmpty { result["matrixDispatch"] = editor.matrixDispatch }
@@ -252,6 +293,7 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
     private func finish(_ reason: String) {
         guard !finished else { return }
         finished = true
+        stopSecureInput()
         exitStatus = reason == "quit" || reason == "eof" ? 0 : 1
         timer?.invalidate()
         timer = nil

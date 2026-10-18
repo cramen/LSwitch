@@ -21,7 +21,12 @@ check-recovery-protocol:
 	mkdir -p .build
 	xcrun swiftc -DDEBUG -parse-as-library Sources/LSwitch/RecoveryIsolationProtocol.swift \
 		Sources/LSwitch/RecoveryIsolationMatrix.swift Sources/LSwitch/RecoveryIsolationChildMailbox.swift \
-		Tests/RecoveryIsolationHarness/RecoveryIsolationMatrixChecks.swift -o .build/recovery-matrix-checks
+		Sources/LSwitch/RecoverySecureInputDiagnosticLease.swift Sources/LSwitch/RecoveryIsolationSecureWatchdog.swift \
+		Sources/LSwitch/RecoveryDiagnosticPair.swift Tests/RecoveryIsolationHarness/RecoveryDiagnosticPairChecks.swift \
+		Sources/LSwitch/RecoverySystemFaultContinuation.swift \
+		Tests/RecoveryIsolationHarness/RecoverySystemFaultContinuationChecks.swift \
+		Tests/RecoveryIsolationHarness/RecoveryIsolationMatrixChecks.swift \
+		Tests/RecoveryIsolationHarness/RecoverySecureInputChecks.swift -o .build/recovery-matrix-checks
 	.build/recovery-matrix-checks
 
 run:

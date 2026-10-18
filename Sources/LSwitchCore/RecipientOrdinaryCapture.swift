@@ -28,6 +28,17 @@ final class RecipientOrdinaryCapture: @unchecked Sendable {
         return attachment.port.permitsMutation(for: scope) && state?.permitsMutation == true
     }
 
+    /// Только закрывающая половина profile boundary после полного preflight.
+    /// Gate — тот же конкретный state, который опубликовал endpoint; произвольные closures не вызываются.
+    func isCurrentLocally(at now: UInt64) -> Bool {
+        lock.lock()
+        let state = activatedState
+        lock.unlock()
+        guard let state, state.permitsMutation,
+              attachment.port.isLocallyOpen(for: scope, at: now) else { return false }
+        return state.permitsMutation
+    }
+
     /// Не вызывает state/port: публикация происходит под state lock в том же worker block.
     func bindActivation(_ state: RecipientTapDriverState) -> Bool {
         lock.lock()

@@ -7,6 +7,24 @@ struct AXConversionExecution {
     let cleanup: ConversionSafetyCleanupEvidence
 }
 
+extension AXMutationSafety {
+    /// Второе стабильное чтение принимает ticket до возврата из await, но не разрешает следующую запись.
+    func settleCanonical(
+        _ observation: AXWriteObservation, expected: AXProfileExpectedState, pause: () async -> Void
+    ) async -> Bool {
+        guard canonicalProfileIsCurrent(), !pending.isEmpty else { return false }
+        await pause()
+        guard profileRead(expected) != nil else { return false }
+        await pause()
+        guard case .accepted(let snapshot) = acceptProfileStep(observation, expected: expected) else { return false }
+        return snapshot != nil
+    }
+}
+
+private enum AXProfileStepAcceptance {
+    case refused, accepted(AXProfileSnapshot?)
+}
+
 /// Совместимость без ledger отделена от нового пути с обязательным bound-контрактом.
 @MainActor
 final class AXMutationSafety {
@@ -16,6 +34,7 @@ final class AXMutationSafety {
     private var binding: AXBoundReceiverContract?
     private var pending: [ConversionSafetySubmissionToken: AXWriteReply] = [:]
     private var noWorkObserved = false
+    private(set) var hasCanonicalProfileBoundary = false
     private(set) var attempted = false
     private(set) var cleanup: ConversionSafetyCleanupEvidence = .noOwnedMutation
 
@@ -26,6 +45,21 @@ final class AXMutationSafety {
     }
 
     var isProfileMode: Bool { request.safetyLedger?.profileBinding != nil }
+
+    var isCanonicalProfileCandidate: Bool {
+        guard isProfileMode, let validation = request.profileValidation, profile != nil else { return false }
+        if request.replacement != nil { return validation.undoTarget != nil && validation.undoSpan != nil }
+        return request.useSelection
+    }
+
+    var profileReceiptTarget: AXProfileReceiptTarget? {
+        hasCanonicalProfileBoundary ? profile?.receiptTarget() : nil
+    }
+
+    func canonicalProfileIsCurrent() -> Bool {
+        guard hasCanonicalProfileBoundary, let ledger = request.safetyLedger else { return false }
+        return profile?.isCurrent(ledger: ledger) == true
+    }
 
     var permitsNoWorkResult: Bool {
         noWorkObserved && !attempted && !Task.isCancelled && request.safetyLedger?.submissionCount == 0
@@ -47,10 +81,16 @@ final class AXMutationSafety {
         return true
     }
 
-    func bind(to element: AXUIElement) -> Bool {
+    func bind(to element: AXUIElement, validating effectiveRequest: ConversionRequest? = nil) -> Bool {
         guard let ledger = request.safetyLedger else { return profile == nil }
+        let effective = effectiveRequest ?? request
+        guard effective.safetyLedger === ledger else { return false }
         if isProfileMode {
-            return profile?.bind(to: element, ledger: ledger, isValid: request.isValid) == true
+            let bound = profile?.bind(to: element, ledger: ledger, isValid: effective.isValid,
+                                      validation: effective.profileValidation) == true
+            hasCanonicalProfileBoundary = bound && isCanonicalProfileCandidate
+                && effective.profileValidation === request.profileValidation
+            return bound
         }
         guard let binding = receiverContract?.bind(element, ledger.operation),
               binding.isValid(for: element, operation: ledger.operation) else { return false }
@@ -83,13 +123,37 @@ final class AXMutationSafety {
         return submit(prepared, kind: .text, in: element, isValid: isValid)
     }
 
+    /// Canonical путь не принимает arbitrary validator: свежий Profile guard замыкает сам submission.
+    func writeCanonicalSelection(
+        _ range: NSRange, in element: AXUIElement, access: any AXTextAccess, restoring: Bool = false
+    ) -> Bool {
+        submitCanonical(kind: restoring ? .restoreSelection : .selection, in: element) {
+            access.prepareSelection(range, in: element)
+        }
+    }
+
+    func writeCanonicalText(_ text: String, in element: AXUIElement, access: any AXTextAccess) -> Bool {
+        submitCanonical(kind: .text, in: element) { access.prepareReplacement(text, in: element) }
+    }
+
     /// Полный snapshot — вход принятого receiver-контракта, но не самостоятельное доказательство completion.
     func requireCompletion(_ observation: AXWriteObservation, expected: AXProfileExpectedState? = nil) -> Bool {
         guard request.safetyLedger != nil else { return true }
-        if isProfileMode { return acceptProfileStep(observation, expected: expected) }
+        if isProfileMode {
+            if case .accepted = acceptProfileStep(observation, expected: expected) { return true }
+            return false
+        }
         resolve(observation)
         guard pending.isEmpty else { markUnknown(); return false }
         return request.safetyLedger?.encounteredUnknown == false
+    }
+
+    func confirmedProfileReplacementSelection(_ expected: AXProfileExpectedState) -> NSRange? {
+        guard isProfileMode,
+              case .accepted(let observed) = acceptProfileStep(.replacementObserved, expected: expected) else {
+            return nil
+        }
+        return (observed ?? profileRead(expected))?.selection
     }
 
     @discardableResult
@@ -182,12 +246,36 @@ final class AXMutationSafety {
         let reply = prepared.submit {
             guard isValid(), self.hasCurrentBinding(element, ledger: ledger),
                   kind.isCleanup || !Task.isCancelled else { return nil }
-            let token = kind == .restoreSelection
-                ? ledger.willSubmitCleanup(kind, operation: ledger.operation)
-                : ledger.willSubmit(kind, operation: ledger.operation)
-            if token != nil { self.markAttempt() }
-            return token
+            return self.reserve(kind, ledger: ledger)
         }
+        return record(reply, ledger: ledger)
+    }
+
+    private func submitCanonical(
+        kind: ConversionSafetySubmissionKind, in element: AXUIElement, prepare: () -> AXPreparedWrite?
+    ) -> Bool {
+        guard profile?.boundElementMatches(element) == true, canonicalProfileIsCurrent(),
+              let prepared = prepare(), let ledger = request.safetyLedger else {
+            return false
+        }
+        let reply = prepared.submit {
+            guard self.canonicalProfileIsCurrent() else { return nil }
+            return self.reserve(kind, ledger: ledger)
+        }
+        return record(reply, ledger: ledger)
+    }
+
+    private func reserve(
+        _ kind: ConversionSafetySubmissionKind, ledger: ConversionSafetyLedger
+    ) -> ConversionSafetySubmissionToken? {
+        let token = kind == .restoreSelection
+            ? ledger.willSubmitCleanup(kind, operation: ledger.operation)
+            : ledger.willSubmit(kind, operation: ledger.operation)
+        if token != nil { markAttempt() }
+        return token
+    }
+
+    private func record(_ reply: AXWriteReply?, ledger: ConversionSafetyLedger) -> Bool {
         guard let reply else { return false }
         pending[reply.submission] = reply
         ledger.observe(.adapterReturned(reply.status == .success), for: reply.submission)
@@ -205,10 +293,12 @@ final class AXMutationSafety {
         return binding?.isValid(for: element, operation: ledger.operation) == true
     }
 
-    private func acceptProfileStep(_ observation: AXWriteObservation, expected: AXProfileExpectedState?) -> Bool {
+    private func acceptProfileStep(
+        _ observation: AXWriteObservation, expected: AXProfileExpectedState?
+    ) -> AXProfileStepAcceptance {
         guard let ledger = request.safetyLedger, let profile, let expected else {
             failProfile(.snapshotUnavailable)
-            return false
+            return .refused
         }
         let step: ConversionSafetyProfileStep
         switch observation {
@@ -216,14 +306,18 @@ final class AXMutationSafety {
         case .replacementObserved: step = .text
         case .finalStateSettled, .cleanupSettled: step = .restoreSelection
         }
+        var observed: AXProfileSnapshot?
         for (token, reply) in pending.sorted(by: { $0.key.ordinal < $1.key.ordinal }) {
-            guard profile.observe(step: step, reply: reply, expected: expected, ledger: ledger) else {
+            guard let snapshot = profile.observeSnapshot(step: step, reply: reply, expected: expected, ledger: ledger)
+            else {
                 markUnknown()
-                return false
+                return .refused
             }
+            observed = snapshot
             pending.removeValue(forKey: token)
         }
-        return pending.isEmpty && !ledger.hasProfileFault && !ledger.encounteredUnknown
+        guard pending.isEmpty, !ledger.hasProfileFault, !ledger.encounteredUnknown else { return .refused }
+        return .accepted(observed)
     }
 
     private func resolve(_ observation: AXWriteObservation) {

@@ -1,5 +1,4 @@
 import Foundation
-
 /// Один владелец состояния замены и отмены; фоновые шаги не пересекаются.
 @MainActor
 public final class Converter {
@@ -25,9 +24,10 @@ public final class Converter {
     private let isInputHoldValid: () -> Bool
     private let drainPendingInput: () async -> Void
     private var inputHeld = false
-    private var revision: UInt64 = 0
+    private(set) var revision: UInt64 = 0
     var undoContext: ContextCheck?
     var undoDocumentTarget: ConversionReceipt.TargetCheck?
+    var undoProfileAnchor: ConversionUndoProfileAnchor?
     var diagnosticAttempts: [String: Int] = [:]
     private let recoverySessionFactory: RecoverySessionFactory?
     private let recoveryOwner: ConversionRecoveryOwner?
@@ -120,8 +120,8 @@ public final class Converter {
         undoStore.invalidate()
         undoContext = nil
         undoDocumentTarget = nil
+        undoProfileAnchor = nil
     }
-
     @discardableResult
     public func trigger(
         expectedWord: String? = nil,
@@ -218,7 +218,9 @@ extension Converter {
             startedAt: DispatchTime.now().uptimeNanoseconds, admission: admission,
             isCurrent: { [weak self] in
                 self?.revision == started && self?.frontmostBundleID() == scope.bundleID && scope.check()
-            }, canCleanup: { [weak self] in self?.frontmostBundleID() == scope.bundleID && scope.check() }
+                    && self?.revision == started
+            }, canCleanup: { [weak self] in self?.frontmostBundleID() == scope.bundleID && scope.check() },
+            revisionFence: ConverterRevisionFence(converter: self, generation: started)
         )
         guard let session = await factory(context) else {
             if let pending = owner.session(for: admission) {
@@ -395,5 +397,4 @@ extension Converter {
             return result
         }
     }
-
 }

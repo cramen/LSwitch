@@ -195,6 +195,14 @@ Session ожидает `locallyDispatched` либо `retainedFailure` отдел
 через метаданные owner. Настоящий native transport и его временные/объёмные пределы
 принимаются отдельно, до включения production factory.
 
+Session удерживает bound engine, поэтому callbacks исходного ConversionRequest
+(`isValid`, `beginMutation`, `canCleanup`) содержат только weak-ссылку обратно на
+Session и возвращают false после её освобождения. Во время операции Session держат
+runTracked и внешний app-owner; pending recovery продолжает принадлежать owner.
+Успешное завершение должно освобождать Session/adapter даже при ещё сохранённом
+профиле или receipt guard для undo: цикл engine → profile → request → Session
+не является допустимым механизмом lifetime. Это проверяется отдельным deallocation test.
+
 #### D2.3. Пауза логической обработки глобального tap
 
 Отдельная scoped processing lease не удерживает native events и не подменяет
@@ -314,6 +322,22 @@ complete/adoptRetained методы; refused adoption не удаляет proof 
 
 #### D2.6. Атомарный logical/native arm и профильный TextEdit pilot
 
+Измерительный v3 подтвердил `.expired`: 92 вложенных request checks заняли 160 мс
+до завершения шести snapshots. Следующая оптимизация объединяет проверку только
+явно помеченного canonical Session request: opening выполняет host/capture preflight,
+Profile — прежние свежие source/focus/protected/window/document/process checks и
+foreground PID до/после, closing — конкретные RAM lease/deadline/revision/phase/ledger
+без произвольных callbacks. Ticket однократен и связан с Session/operation/profile;
+новый nested opening инвалидирует прежний. Сохраняются границы каждого snapshot/setter,
+исходный срок 400 мс и sticky fault, а не разрешение между чтениями или через await.
+Opaque provenance создаётся только при конструировании canonical request самим
+Converter/Session. Public init и wrappers дополнительных validators его не сохраняют.
+Generic request, unknown wrappers и undo пока используют полный прежний путь; это
+промежуточный шаг реализации, а не исключение из обязательной приёмки undo.
+Нужны regressions смены foreground при старом AX focus, source/Secure, reentry target/
+revision/attempt/OFF, истечения срока внутри AX callback, foreign/stale/reused ticket,
+исчезновения weak Session и дополнительного validator, ставшего false до payload.
+
 Следующий opt-in DEBUG pilot связывает существующие компоненты, не включает factory
 в обычном режиме до приёмки 4.2. Он ограничен явно переданным локальным тестовым
 документом: AXDocument должен совпасть с file URL до любого payload/capture. Неполный
@@ -341,6 +365,9 @@ lock и передаёт отмену native flush; два независимы�
 очистка после этого не выполняется. Factory отказ не включает fallback в старый hold.
 Pilot допускает только профиль TextEdit AX; остальные конфигурации отказывают до
 мутации. Production включение требует отдельной живой проверки и lifecycle wiring.
+Окна menu-bar агента получают штатное application menu с Cmd+Q, ведущим в тот же
+applicationShouldTerminate/recovery confirmation. Выход проверяется без обращения
+к SystemUIServer; наличие этого menu не снимает quarantine и не удаляет RAM самостоятельно.
 
 Runtime выдаёт scoped invocation token до trigger и сохраняет занятость до отдельного
 finish после outcome: повторный/busy trigger не может закончить чужую lease. Внешний
@@ -349,6 +376,126 @@ owner и runtime сохраняют Session/adapter при ошибке либо
 retention и остановку scoped driver без replay. Quit сначала ждёт RAM handover, затем
 использует прежнее explicit решение пользователя; удаление само не разрешает новый ввод
 в неподтверждённую цель. onStateChange содержит лишь сигнал перечитать metadata.
+
+Первый живой TextEdit pilot изменил fixture, но дошёл до final-state-not-settled
+после истечения исходных 400 мс. Статический разбор обнаружил в context до шести
+scalar AX reads: Role/Window повторялись при повторном получении document identity.
+Узкая оптимизация объединяет свежие Role/Window/element Document в один
+AXUIElementCopyMultipleAttributeValues, затем читает свежий Window Document при
+необходимом fallback. Batch принимается только с точной формой/типами; неизвестное
+значение не превращается в noValue или untitled. PID окна проверяется отдельно.
+
+Версии TextEdit и системы кэшируются только внутри environment по свежему
+process identity (PID + birth) и bundle identity/URL. Неизвестный процесс/application
+или смена ключа инвалидируют запись. Role, window, document, focus, source и protected
+не кэшируются. Число/порядок safety boundaries, полные snapshots, два stable чтения,
+20-мс интервалы и предел 400 мс не меняются. Уменьшение metadata RPC не считается
+доказательством успешного pilot или выполнения latency gate без нового live-прогона.
+
+Повторный healthy pilot после этой оптимизации снова исчерпал 400 мс внутри AX engine
+(`text-completion-unconfirmed`). Перед дальнейшими изменениями добавляются DEBUG
+metadata-only counts и cumulative monotonic timings для requestIsValid, source,
+protected, focus, context и snapshot. Измерения начинаются после prepare профиля;
+snapshot явно inclusive: его время включает вложенные guards и не суммируется с ними
+как независимая стоимость. Отчёт только читается после операции; hot path не вызывает
+diagnostic observers, не пишет логи и не хранит текст, пути, URL или AX payload.
+Текущий profileFault читается из связанного ledger. Это измерение не меняет порядок
+проверок, два stable чтения, 20-мс интервалы, admission или исходный deadline.
+
+V4 подтвердил уменьшение requestIsValid до 11,5 мс, но healthy операция снова
+исчерпала 400 мс на final-state settlement. Следующий узкий шаг применяется только
+к canonical manual request после успешного exact profile bind: внешние AX guards
+делегируют тому же полному Profile boundary, а generic manual document wrapper
+заменяется его более строгой проверкой element/window/document/process identity.
+Custom validators, auto и generic undo сохраняют прежний полный путь. Receipt получает
+отдельный source-independent target с сильным удержанием captured identity и fresh
+проверкой документа без старой Session/ledger; transient nil generic document read
+не может убрать этот guard. Добавление custom receipt guard теряет typed provenance.
+Generic bind получает именно effective request после добавления document/context
+wrapper: потеря provenance и дополнительный validator действуют также внутри каждого
+profile payload boundary, а не только во внешней проверке перед setter.
+Тот же delegation допустим для typed undo, только если capability несёт certified
+anchor прежнего receipt и совпадающие exact saved original/converted/tail. Anchor
+связан с подтверждённой конечной кареткой; первый snapshot до own submission обязан
+совпасть по caret и UTF-16 converted+tail. Identity anchor проверяется на каждой
+профильной границе; после собственной selection старый caret не проверяется.
+
+Только TextEdit profile объединяет Subrole/ProtectedContent в один свежий AX batch.
+Точная форма/типы обязательны; noValue/attributeUnsupported означают известное
+отсутствие атрибута, иные ошибки, CFNull и malformed batch дают protected отказ.
+Secure Input проверяется на MainActor, данные защиты не кэшируются. Это сокращение
+metadata IPC не меняет полноту snapshots, два stable наблюдения, интервал 20 мс,
+исходный deadline или requirement отдельной приёмки undo.
+
+После v5 (healthy снова expired) шаг v6 ограничен двумя доказуемыми сокращениями.
+В bounded snapshot reader закрывающий guard после count одновременно является
+guard перед text read: между ними только pure bounds/NSRange. Profile observation
+создаёт opaque ticket после pure binding/state checks и выполняет единственный full
+guard внутри своего fresh read. Canonical prepared write получает отдельный API без
+arbitrary validator: полный profile guard выполняется после prepare непосредственно
+перед submission один раз; generic validator и receiver binding остаются прежними.
+
+Observation подтверждения replacement синхронно возвращает тот же accepted snapshot
+selection в finishWrite, вместо повторного snapshot без промежуточных external calls.
+Значение не переносит разрешение через await: fresh guard перед следующим setter и
+последующие stable/final snapshots сохраняются. Ticket acceptance, pending removal
+и возврат selection между fresh read и использованием — только pure локальные действия.
+Два stable чтения с 20 мс, max4, cleanup и 400 мс не сокращаются; объединение acceptance
+с самим stable read пока не входит в этот шаг.
+Runtime сохраняет только value snapshot отчёта перед освобождением successful attempt;
+завершение старого await не перезаписывает статистику новой invocation. Logical failure
+читается по exact lease либо берётся из результата finish, без новых AX/IPC/expiry effects.
+Новая invocation очищает прежнюю статистику; ради диагностики Session/driver не удерживаются.
+
+После v6 healthy снова истёк на final settlement. Следующий шаг объединяет
+подтверждение pending submission со вторым стабильным чтением только canonical
+профиля. Первое и второе чтения разделены прежним 20-мс await, каждое выполняет
+полный свежий profile snapshot. Ticket создаётся до второго чтения, принимается
+синхронно после его закрывающего guard; наружу возвращается лишь завершение этого
+наблюдения, не разрешение для последующей записи. После await перед следующим
+setter и при финальном cleanup остаются свежие проверки. Generic/custom settlement
+не меняется. Отмена/смена цели/ошибка второго чтения оставляют pending command
+неподтверждённой; позднее совпадение не очищает fault. Дополнительный третий snapshot
+и соседние внешние guards того же canonical read больше не повторяются.
+
+V7 сократил число полных границ, но свежий global AX focus остаётся главным расходом.
+В canonical boundary начальные focus/protected reads дублируют закрывающие reads:
+между ними читаются только metadata ранее связанного элемента, без payload или setter.
+Следующий шаг оставляет fresh focus/protected после metadata и до любого payload/
+submission, а source/foreground — с обеих сторон. Request/lease closing остаётся
+последним. При смене фокуса/защиты во время metadata чтения закрывающая проверка
+отказывает до payload. Generic/custom boundary сохраняет прежний порядок.
+
+#### D2.7. Точный undo с типизированной целью предыдущего receipt
+
+Подтверждённый canonical AX receipt может содержать внутренний AXProfileReceiptTarget:
+profile ID, PID с birth, элемент, окно, exact document identity и подтверждённую final
+selection. Anchor не удерживает старые Session/Profile/driver либо snapshot provider.
+Его независимый fresh target guard не фиксирует прежний source: после успешного TIS
+текущая раскладка уже другая. Public receipt и checkingTarget(custom) не сохраняют эту
+provenance. Наличие одинакового текста или того же ledger её не заменяет.
+
+Converter сохраняет typed anchor только после ordinary completion вместе с исходным
+original/converted/trailingText и bundle identity. Новый undo получает свежие Session,
+profile, lease и ledger. Старые undoContext/previousTarget проверяются при preflight;
+запись undo потребляется один раз. Combined capability выдаётся лишь при exact UTF-16
+совпадении сохранённого anchor с UndoRecord и параметрами inverse request. Nil,
+неизвестная provenance и дополнительные validators сохраняют прежний полный путь.
+Смена реальной цели после допуска необратимо отказывает, а не запускает другой путь.
+
+Новый profile сравнивает typed old target со своими свежими element/window/document/
+process observations на каждой boundary без второго комплекта AX RPC. До первого
+собственного setter initial snapshot обязан иметь старую final caret и точный UTF-16
+span converted+tail перед ней; NFC/NFD и замена NBSP на ASCII space здесь не эквивалентны.
+После первого submission старая caret уже не является ожидаемой: допустимые собственные
+переходы selection/text/finalCaret проверяются прежними per-step snapshots и ledger.
+Финальный inverse receipt по-прежнему должен точно совпасть с сохранённым original.
+
+Приёмка включает успешный RU/EN inverse с NBSP и decomposed Unicode, другой документ/
+окно/процесс при том же тексте, перемещение caret к повторяющемуся слову, custom validator
+внутри snapshot, устаревший/потреблённый undo и освобождение старой Session. Текстовые
+payload anchors остаются в прежнем RAM undo; журналы получают только метаданные.
+Предел 400 мс не меняется, а приёмка undo остаётся обязательной.
 
 ### D3. Подготовка допуска до первой мутации
 
@@ -758,6 +905,86 @@ EOF и завершается до остановки driver; ни один ош
 clipboard и AX не используются. Отчёты содержат только counts/bools/enum и fixture-only
 границы. Source/hash manifest и живые запуски выполняются отдельно; production factory
 и глобальный processing lease этим диагностическим режимом не включаются.
+
+### D7.8. Собственный TextEdit: выделение, потеря readback и удержанный ввод
+
+После отдельного healthy control DEBUG pilot допускает явный дополнительный флаг
+`--recovery-textedit-fault=missing-after-selection` только вместе с обязательным
+`--recovery-textedit-pilot=/absolute/own-file.txt`. Неверный, повторный либо отдельный
+fault-флаг завершает запуск без legacy fallback; обычный и Release runtime его не используют.
+Проверка file URL, профиль, ledger, prearm, native capture и 400 мс остаются прежними.
+
+Отдельный wrapper выполняет один настоящий подготовленный selection setter с тем же
+submission token, затем запрещает дополнительные setters. До первого ожидания свежий
+снимок разрешён. Первый waitForUpdate проверяет фактический диапазон выделения и
+асинхронно ждёт подтверждения prefix по metadata существующего capture: не менее двух
+событий, двух чтений длины Unicode и ненулевого числа UTF-16 байт. Ожидание ограничено
+минимумом из 100 мс и остатка исходной lease; MainActor не блокируется. Разрешённый
+внешний HID helper с проверкой заголовка отправляет double Shift и фиксированный prefix
+одним заранее подготовленным batch. Wrapper не создаёт и не отправляет события сам.
+
+После ожидания поставщик snapshot постоянно возвращает nil, не читая payload.
+При отсутствии prefix, смене контекста, отмене либо deadline опыт считается INCONCLUSIVE,
+а не успешной проверкой P1. При совпавших условиях это инъекция missing readback после
+реальной AX-мутации и реального capture, а не утверждение о естественном сбое macOS.
+Приёмка требует исходный текст с опасным выделением, ноль text/повторных selection writes,
+отсутствие TIS/receipt/replay, передачу исходного prefix в RAM и блокировку последующего
+ввода целевому приложению. Reveal, hide/reopen и quit-cancel проверяют ту же запись.
+Отчёт содержит только enum, счётчики и booleans; clipboard, payload-журналы и файлы с
+удержанным вводом не используются. Сам wrapper и компонентные тесты не закрывают 4.2.
+
+### D7.9. Диагностические Secure Input и отключение собственного tap
+
+Отдельный DEBUG CLI `--recovery-system-fault=` принимает только control,
+secure-before-arm, secure-after-capture, head-before-arm, head-after-capture
+и tail-after-capture. Он использует существующий подписанный own-child, bounded
+nonce/sequence IPC и четыре заранее выделенные fixture-метки. Новый Core facade
+связывает реальные RecoveryIsolationSession/RecipientTapDriver; capture принимает
+только известный prefix от собственного sender PID. Произвольный пользовательский
+ввод, AX-конвертер и обычный production runtime этим стендом не подключаются.
+
+Child выполняет EnableSecureEventInput, DisableSecureEventInput и IsSecureEventInputEnabled
+только на MainActor. При уже включённом глобальном режиме Enable не вызывается.
+Один успешный собственный Enable имеет один соответствующий Disable; повторный start
+не наращивает счётчик. Собственный режим снимается при явном stop, inactivity, EOF,
+abort и двухсекундном TTL. Ошибка Disable не объявляется успешной балансировкой.
+Parent имеет отдельный ограниченный watchdog собственного child; при cleanup
+не затрагиваются чужие процессы или чужой Secure Input enable count.
+Watchdog вооружается до отправки Enable. Неуспешная отправка не снимает страховку
+до подтверждённого собственного Disable либо завершения child.
+
+Команды secureInputOn/secureInputOff не содержат payload. Ответ secure_input и
+optional secure metadata содержат только Bool и ограниченные счётчики 0/1; отсутствие
+полей в прежнем протоколе не меняет прежние режимы. Secure metadata не добавляется к
+matrix frame. Никаких паролей, clipboard, AX-чтения, payload-журналов или CG mouse.
+
+Control подтверждает обычную доставку фиксированной пары в собственное поле.
+Before-arm faults отказывают до capture/мутации: Secure Input отказ является явным
+diagnostic preflight по ответу child, а не принятым production guard. Mid-hold faults
+начинаются только после фактического capture 2 событий/16 UTF-16 bytes. Затем scope
+необратимо закрывается, полный prefix передаётся storage-only, а отдельная поздняя
+fixture-пара измеряет дальнейшее поведение доставки. Это тестовые posts, не replay
+удержанного prefix. Они считаются отдельно; отсутствие callback не является ACK.
+Оба пакета готовятся до первого Down. Если после начатого Down обычный Up не начат,
+defer допускает одну попытку только подготовленного Up в исходный PID+birth, без
+требования прежнего foreground. При потере identity или формы Up остаётся явный
+unposted debt. Любая неполная обычная пара остаётся INCONCLUSIVE даже после balancing
+Up; повторного Down, смены адресата и автоматического retry нет.
+Начало quit/timeout необратимо закрывает diagnostic forward progress до ожидания
+retention. После любого await start/disable/retire и после secure callback этот
+допуск проверяется заново. Отмена quit не возобновляет старые continuation; разрешены
+лишь сохранение/cleanup и описанный выше balancing Up исходному процессу.
+
+Tap-disable выполняется только для собственного head либо tail на worker через
+enqueue: sticky local loss, фактический tapEnable(false), затем isEnabled/обычный
+health readback. Возврат disable не доказывает отмену queued packets или предотвращение
+admission. Автоматического rearm и повторной отправки нет. Secure/off/tap-loss не
+удаляют принятую RAM-запись; её раскрытие и удаление/quit используют прежний явный UI.
+
+Отчёт всегда помечен fixture-only, productionEnabled=false и privacyGuardAccepted=false.
+Он разделяет фактические наблюдения ОС, diagnostic refusal и непроверенный будущий
+production guard. Cached clear не получает свойства instantaneous ACK, произвольный
+TTL cache не вводится. Без отдельного guard и полной системной приёмки 4.2 не закрывается.
 
 ## Risks / Trade-offs
 

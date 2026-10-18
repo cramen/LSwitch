@@ -111,6 +111,13 @@ final class PreparedRecoveryAdmission: @unchecked Sendable {
         return true
     }
 
+    /// Только локальный latch. Сам по себе не заменяет проверку конкретного recipient gate.
+    func isLocallyOpen(for expected: RecoveryHoldBinding) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return binding == expected && stopped == nil && sealed == nil
+    }
+
     /// Размер измеряет capture-адаптер до append. Это логические UTF-16 units, не RSS CGEvent.
     /// Lock order: admission → внутренний RAM append. Closure не вызывает admission повторно и не делает IO.
     /// false от append означает отсутствие изменений очереди; частичный append с false запрещён контрактом.

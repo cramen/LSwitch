@@ -64,6 +64,7 @@ extension Converter {
                             bundleID: context.bundleID))
         undoDocumentTarget = receipt.targetIsCurrent
         undoContext = { context.isCurrent() && receipt.targetIsCurrent?() != false }
+        undoProfileAnchor = ConversionUndoProfileAnchor(receipt: receipt, bundleID: context.bundleID)
         guard layout.confirmed else {
             return .partiallyConverted(original: receipt.original, converted: receipt.converted, targetLayout: target)
         }
@@ -77,6 +78,8 @@ extension Converter {
     ) -> TrackedConversionPlan? {
         let undo = input.allowUndo ? undoStore.pendingUndo() : nil
         let previousTarget = undoDocumentTarget
+        let previousAnchor = undoProfileAnchor
+        undoProfileAnchor = nil
         if let undo {
             let valid = undo.bundleID == context.bundleID && undoContext?() == true
             undoStore.invalidate()
@@ -84,14 +87,17 @@ extension Converter {
             undoDocumentTarget = nil
             guard valid else { diagnostics.reject(.contextChanged); return nil }
         }
-        let request = ConversionRequest(
+        var input = CanonicalConversionRequestInput(
             expectedWord: undo?.converted ?? input.expectedWord, trailingText: undo?.trailingText ?? input.trailingText,
             replacement: undo?.original, sourceLayout: undo == nil ? context.sourceLayout : nil,
-            useSelection: undo == nil && input.allowUndo, diagnostics: diagnostics, safetyLedger: session.ledger,
-            beginMutation: { session.beginMutation() }, canCleanup: { session.canCleanup },
-            isValid: { session.isValid }
+            useSelection: undo == nil && input.allowUndo, diagnostics: diagnostics
         )
-        return .init(request: undo == nil ? request : request.checkingTarget(previousTarget), undo: undo)
+        if let undo, previousTarget != nil, previousAnchor?.matches(undo) == true {
+            input.undoAnchor = previousAnchor
+        }
+        let request = ConversionRequest(canonical: input, session: session)
+        let typedUndo = request.profileValidation?.undoTarget != nil
+        return .init(request: undo == nil || typedUndo ? request : request.checkingTarget(previousTarget), undo: undo)
     }
 
     private func finishTrackedFailure(

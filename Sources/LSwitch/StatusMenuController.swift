@@ -15,6 +15,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     private let permissions = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let warning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let recovery = NSMenuItem(title: "Восстановить сохранённый ввод…", action: nil, keyEquivalent: "")
+    private var windowRecovery: NSMenuItem?
     private var enabled = true
     private var status = PermGuard.Status(accessibility: true, inputMonitoring: true)
     private var operationWarning: String?
@@ -45,6 +46,7 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
             title: "Выйти из LSwitch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"
         ))
         item.menu = menu
+        installWindowMenu()
         refresh()
     }
 
@@ -70,7 +72,32 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) { onRefresh() }
 
-    func setRecoveryAvailable(_ available: Bool) { recovery.isHidden = !available }
+    func setRecoveryAvailable(_ available: Bool) {
+        recovery.isHidden = !available
+        windowRecovery?.isHidden = !available
+    }
+
+    /// Cmd+Q должен проходить штатный recovery quit и в окне LSUIElement-агента.
+    private func installWindowMenu() {
+        let main = NSMenu()
+        let application = NSMenu(title: "LSwitch")
+        let root = NSMenuItem(title: "LSwitch", action: nil, keyEquivalent: "")
+        root.submenu = application
+        main.addItem(root)
+        let restore = NSMenuItem(title: recovery.title, action: #selector(recoveryAction), keyEquivalent: "")
+        restore.target = self
+        restore.isHidden = true
+        windowRecovery = restore
+        application.addItem(restore)
+        let settings = NSMenuItem(title: "Настройки…", action: #selector(settingsAction), keyEquivalent: ",")
+        settings.target = self
+        application.addItem(settings)
+        application.addItem(.separator())
+        application.addItem(NSMenuItem(
+            title: "Выйти из LSwitch", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"
+        ))
+        NSApplication.shared.mainMenu = main
+    }
 
     private func refresh() {
         toggle.title = enabled ? "Выключить LSwitch" : "Включить LSwitch"

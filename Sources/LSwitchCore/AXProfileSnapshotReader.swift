@@ -17,7 +17,8 @@ struct AXProfileSnapshotReader {
         guard allowed(), let count = readCount(), allowed(),
               count >= 0, count <= AXProfileSnapshot.maximumUTF16Units else { return nil }
         let range = NSRange(location: 0, length: count)
-        guard allowed(), let text = readText(range), allowed(), text.utf16.count == count,
+        // После закрывающего count guard были только pure bounds и создание NSRange.
+        guard let text = readText(range), allowed(), text.utf16.count == count,
               let confirmedCount = readCount(), allowed(), confirmedCount == count,
               let selection = readSelection(), allowed() else { return nil }
         let snapshot = AXProfileSnapshot(text: text, selection: selection, characterCount: count)

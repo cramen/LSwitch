@@ -56,6 +56,16 @@ final class RecoveryCapturePort: @unchecked Sendable {
         return true
     }
 
+    /// Closing факт после preflight: без callback gate/clock, только scoped RAM и исходный deadline.
+    func isLocallyOpen(for expected: RecoveryCaptureScope, at now: UInt64) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard expected == scope, stopped == nil, seal == nil else { return false }
+        expireLocked(at: now)
+        return now < holdDeadline && stopped == nil && buffer.isHolding
+            && admission.isLocallyOpen(for: scope.binding)
+    }
+
     @discardableResult
     func invalidate(_ reason: RecoveryAdmissionFailure, scope expected: RecoveryCaptureScope) -> Bool {
         lock.lock()

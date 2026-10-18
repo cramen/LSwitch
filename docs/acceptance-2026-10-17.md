@@ -170,7 +170,8 @@ native waiter и переход outcome → logical FIFO → ready до запу
 Кандидат v1 SHA `16b94bfa4b05d1a30d504f9e9d3718830acad433333dcc2e6aa03e2c4e44e940`,
 manifest `.build/recovery-textedit-pilot-v1-manifest.json`. Live healthy control **FAILED**:
 профиль/driver/arm подготовлены примерно за 16 мс, но AX engine занял 395 мс и
-достиг исходного lease 400 мс в final-state settlement. Собственный документ уже
+отказал около границы исходного lease 400 мс в final-state settlement. Это согласуется
+с истечением срока; отдельный lease/profile fault reason в v1 не записан. Собственный документ уже
 содержал ожидаемое исправление; TIS не переключён, receipt/ordinary replay не выданы,
 открыта RAM recovery с 0 удержанных событий. Это отказ приёмки здорового пути,
 а не успешная конвертация и не основание увеличить лимит.

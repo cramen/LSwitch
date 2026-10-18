@@ -23,6 +23,8 @@ final class PreparedEventProcessingArm: @unchecked Sendable {
     }
 
     var isCurrent: Bool { state.isCurrent(lease, at: clock()) }
+    /// Closing boundary получает время напрямую; injected clock здесь никогда не вызывается.
+    func isCurrent(at now: UInt64) -> Bool { state.isCurrent(lease, at: now) }
     func currentTime() -> UInt64 { clock() }
     func invalidate(_ reason: EventProcessingInvalidation) { state.invalidate(reason, lease: lease) }
 

@@ -19,6 +19,7 @@ public final class ConversionRecoverySession {
     private var awaitingTransport = false
     private var retentionRequestedDuringCommit = false
     private var phase = Phase.active
+    private var profileValidationNonce: UUID?
     private enum Phase { case active, preparing, prepared, committing, transportPending, ordinaryTransferred, retained }
 
     init?(
@@ -57,6 +58,55 @@ public final class ConversionRecoverySession {
     }
 
     var canCleanup: Bool { context.canCleanup() }
+
+    func makeProfileValidation(undoAnchor: ConversionUndoProfileAnchor? = nil) -> AXProfileRequestValidation? {
+        #if DEBUG
+        guard let binding = ledger.profileBinding, context.revisionFence != nil,
+              boundAXEngine != nil, allowedMechanisms == [.accessibility],
+              let native = adapter as? TextEditRecoveryAdapter, native.supportsProfileValidation else { return nil }
+        return .init(session: self, binding: binding, undoAnchor: undoAnchor)
+        #else
+        return nil
+        #endif
+    }
+
+    func beginProfileValidation(binding: ConversionSafetyProfileBinding) -> AXProfileValidationToken? {
+        #if DEBUG
+        guard ledger.profileBinding == binding, profileStateIsCurrent,
+              let native = adapter as? TextEditRecoveryAdapter else { return nil }
+        let nonce = UUID()
+        profileValidationNonce = nonce
+        guard native.beginProfileValidation(), profileValidationNonce == nonce, profileStateIsCurrent else {
+            fault(.preparationFailed)
+            return nil
+        }
+        return .init(session: identifier, nonce: nonce)
+        #else
+        return nil
+        #endif
+    }
+
+    func finishProfileValidation(_ token: AXProfileValidationToken) -> Bool {
+        guard token.matches(session: identifier, nonce: profileValidationNonce) else { return false }
+        profileValidationNonce = nil
+        #if DEBUG
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard let native = adapter as? TextEditRecoveryAdapter,
+              native.finishProfileValidation(at: now), profileStateIsCurrent else {
+            fault(.preparationFailed)
+            return false
+        }
+        return true
+        #else
+        return false
+        #endif
+    }
+
+    private var profileStateIsCurrent: Bool {
+        phase == .active && !Task.isCancelled && context.revisionFence?.isCurrent == true
+            && ledger.decision == nil && !ledger.hasProfileFault && !ledger.encounteredUnknown
+            && ledger.inputOwner == .transaction
+    }
 
     func beginMutation() -> Bool {
         guard isValid, ledger.permitsOrdinarySubmission, adapter.beginMutation() else {

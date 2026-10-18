@@ -25,6 +25,7 @@ enum StartupCommands {
 
     private static func runRecoveryCommand(arguments: [String]) -> Int32? {
         if let status = RecoveryIsolationReceiver.runIfRequested(arguments: arguments) { return status }
+        if let status = RecoverySystemFaultProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryOrdinaryProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryEventMatrixProbe.runIfRequested(arguments: arguments) { return status }
         if let status = RecoveryIsolationControl.runIfRequested(arguments: arguments) { return status }

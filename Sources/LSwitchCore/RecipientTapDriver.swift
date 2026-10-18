@@ -115,6 +115,22 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
         return state.installOrdinaryFlush(flush) ? flush : nil
     }
 
+    /// Diagnostic-only: потеря защёлкивается до запроса; подтверждается лишь реальный disabled readback.
+    public func disableOwnedTapForDiagnostics(_ tap: RecipientDiagnosticTap) async -> Bool {
+        state.markLost(.tapDisabled)
+        return await withCheckedContinuation { continuation in
+            let reply = RecipientDiagnosticDisableReply(continuation)
+            let worker = self.worker
+            if !worker.enqueue({
+                guard reply.begin() else { return }
+                reply.finish(worker.disableOwnedTapForDiagnostics(tap))
+            }) { reply.finish(false) }
+            DispatchQueue.global(qos: .userInitiated).asyncAfter(deadline: .now() + .milliseconds(250)) {
+                reply.finish(false)
+            }
+        }
+    }
+
     public func closeGeneration() { bridge.closeGeneration() }
 
     /// EOF не возобновляет прежний scope и не снимает target quarantine автоматически.

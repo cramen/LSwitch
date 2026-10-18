@@ -13,18 +13,24 @@ public final class TextEditRecoveryRuntime {
     let eventTap: @MainActor () -> EventTapCore?
     let currentSafety: @MainActor () -> Bool
     let testDocument: URL?
+    let faultMode: TextEditRecoveryFaultMode
     var attempt: TextEditRecoveryAttempt?
     var quitAuthorized = false
+    var lastProfileReport: TextEditRecoveryProfileReport?
+    var lastProfileInvocation: TextEditRecoveryInvocation?
 
     public init(
-        testDocument: URL, eventTap: @escaping @MainActor () -> EventTapCore?,
-        currentSafety: @escaping @MainActor () -> Bool
+        testDocument: URL, faultMode: TextEditRecoveryFaultMode = .none,
+        eventTap: @escaping @MainActor () -> EventTapCore?, currentSafety: @escaping @MainActor () -> Bool
     ) {
         self.testDocument = testDocument.isFileURL && testDocument.path.hasPrefix("/")
             ? testDocument.standardizedFileURL : nil
         self.eventTap = eventTap
         self.currentSafety = currentSafety
+        self.faultMode = faultMode
     }
+
+    public var faultReport: TextEditRecoveryFaultReport? { attempt?.fault?.report }
 
     public var status: TextEditRecoveryStatus {
         .init(hasPending: owner.hasPendingRecovery || owner.hasPendingTransport || attempt?.adapter?.hasPending == true,
@@ -37,6 +43,8 @@ public final class TextEditRecoveryRuntime {
         guard attempt == nil, !owner.isOccupied, !quitAuthorized, currentSafety() else { return nil }
         guard attempt == nil, !owner.isOccupied, !quitAuthorized else { return nil }
         let token = TextEditRecoveryInvocation(runtime: identity)
+        lastProfileReport = nil
+        lastProfileInvocation = nil
         attempt = TextEditRecoveryAttempt(invocation: token)
         setStage(.invocation)
         return token
@@ -50,8 +58,10 @@ public final class TextEditRecoveryRuntime {
         attempt.factoryEntered = true
         attempt.preparing = true
         defer { attempt.preparing = false; onStateChange() }
+        attempt.fault = faultMode == .missingAfterSelection ? TextEditRecoveryFaultFixture() : nil
         setStage(.profile)
-        guard let prepared = prepareDriver(context), isLive(attempt) else { return nil }
+        guard let prepared = prepareDriver(context, fault: attempt.fault), isLive(attempt) else { return nil }
+        attempt.profile = prepared.profile
         let ledger = prepared.ledger
         let driver = prepared.driver
         let scope = driver.bridge.capturedScope
@@ -101,17 +111,25 @@ public final class TextEditRecoveryRuntime {
         _ resources: TextEditRecoveryAdapterResources, context: ConversionRecoveryContext,
         attempt: TextEditRecoveryAttempt
     ) -> TextEditRecoveryAdapter {
-        TextEditRecoveryAdapter(
+        let capture = resources.capture
+        attempt.fault?.bind(deadline: resources.logical.prepared.deadline, isCurrent: { [weak capture] in
+            capture?.isCurrent == true && resources.logical.isCurrent() && context.isCurrent()
+        }, counters: { resources.capture.attachment.counters })
+        return TextEditRecoveryAdapter(
             resources: resources, contextIsCurrent: context.isCurrent,
             currentSafety: { [weak self, weak attempt] in
                 guard let self, let attempt else { return false }
-                return self.attempt === attempt && attempt.interruption == nil && self.currentSafety()
-            }, changed: { [weak self] in self?.adapterChanged() }
+                guard self.attempt === attempt, attempt.interruption == nil, self.currentSafety() else { return false }
+                return self.attempt === attempt && attempt.interruption == nil
+            }, changed: { [weak self] in self?.adapterChanged() },
+            validationScope: TextEditRecoveryValidationScope(runtime: self, attempt: attempt)
         )
     }
 
-    private func prepareDriver(_ context: ConversionRecoveryContext) -> TextEditRecoveryPreparation? {
-        guard let prepared = prepareProfile(), let sender = SystemProcessIdentity.read(processID: getpid()) else {
+    private func prepareDriver(
+        _ context: ConversionRecoveryContext, fault: TextEditRecoveryFaultFixture?
+    ) -> TextEditRecoveryPreparation? {
+        guard let prepared = prepareProfile(fault), let sender = SystemProcessIdentity.read(processID: getpid()) else {
             return nil
         }
         let ledger = ConversionSafetyLedger(generation: context.generation, profile: prepared.profile.binding)
@@ -119,7 +137,7 @@ public final class TextEditRecoveryRuntime {
         guard let gate = RecipientGateState(scope: scope), let bridge = RecoveryRecipientProbeBridge(
             sender: sender, target: scope.target, ledger: ledger, gate: gate
         ), let driver = RecipientTapDriver(bridge: bridge) else { return nil }
-        return .init(ledger: ledger, driver: driver,
+        return .init(ledger: ledger, driver: driver, profile: prepared.profile,
                      engine: AXTextConverter(access: prepared.access, observationProfile: prepared.profile))
     }
 
@@ -149,7 +167,9 @@ public final class TextEditRecoveryRuntime {
                      capture: capture, logical: logical)
     }
 
-    private func prepareProfile() -> (profile: AXObservationProfile, access: SystemAXTextAccess)? {
+    private func prepareProfile(
+        _ fault: TextEditRecoveryFaultFixture?
+    ) -> (profile: AXObservationProfile, access: any AXTextAccess)? {
         guard let testDocument, let target = InputSafety.captureTarget() else { return nil }
         let access = SystemAXTextAccess()
         let system = AXProfileEnvironment.textEditCandidate()
@@ -159,10 +179,14 @@ public final class TextEditRecoveryRuntime {
                 guard let context = system.context(element), let document = URL(string: context.document),
                       document.isFileURL, document.standardizedFileURL == testDocument else { return nil }
                 return context
-            }, snapshot: system.snapshot
+            }, snapshot: { element, canRead in
+                if let fault { return fault.snapshot(element, canRead: canRead, original: system.snapshot) }
+                return system.snapshot(element, canRead)
+            }, foregroundProcessID: system.foregroundProcessID
         )
         guard let profile = AXObservationProfile.prepareTextEdit(element: target.element, environment: guarded),
               profile.binding.target.processID == target.capturedApplicationPID else { return nil }
+        if let fault { return (profile, TextEditRecoveryFaultAccess(original: access, fixture: fault)) }
         return (profile, access)
     }
 
@@ -176,6 +200,7 @@ public final class TextEditRecoveryRuntime {
 private struct TextEditRecoveryPreparation {
     let ledger: ConversionSafetyLedger
     let driver: RecipientTapDriver
+    let profile: AXObservationProfile
     let engine: any ConversionEngine
 }
 
@@ -192,6 +217,9 @@ final class TextEditRecoveryAttempt {
     var lease: EventProcessingLease?
     var adapter: TextEditRecoveryAdapter?
     var session: ConversionRecoverySession?
+    var fault: TextEditRecoveryFaultFixture?
+    var profile: AXObservationProfile?
+    var logicalFailure: EventProcessingInvalidation?
 
     init(invocation: TextEditRecoveryInvocation) { self.invocation = invocation }
 }

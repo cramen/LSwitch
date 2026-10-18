@@ -98,6 +98,20 @@ final class RecipientTapDriverWorker: @unchecked Sendable {
         return state.workerReady
     }
 
+    /// Только worker block вне callback/resource/state locks. Никакого rearm или admission proof.
+    func disableOwnedTapForDiagnostics(_ tap: RecipientDiagnosticTap) -> Bool {
+        lock.lock()
+        let selected = tap == .head ? head : tail
+        let active = started && !stopping
+        lock.unlock()
+        state.markLost(.tapDisabled)
+        guard active, let selected else { return false }
+        CGEvent.tapEnable(tap: selected, enable: false)
+        let disabled = !CGEvent.tapIsEnabled(tap: selected)
+        _ = refreshHealth()
+        return disabled
+    }
+
     private var shouldStop: Bool {
         lock.lock()
         defer { lock.unlock() }

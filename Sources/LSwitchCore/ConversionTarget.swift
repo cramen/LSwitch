@@ -18,6 +18,10 @@ extension ConversionRequest {
 }
 
 extension ConversionReceipt {
+    func checkingProfileTarget(_ target: AXProfileReceiptTarget) -> ConversionReceipt {
+        .init(original: original, converted: converted, trailingText: trailingText, profileTarget: target)
+    }
+
     func checkingTarget(_ check: TargetCheck?) -> ConversionReceipt {
         ConversionReceipt(original: original, converted: converted, trailingText: trailingText, targetIsCurrent: check)
     }

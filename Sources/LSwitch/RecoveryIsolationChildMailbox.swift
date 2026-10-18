@@ -26,6 +26,8 @@ struct IsolationChildMessage: Sendable {
     let matrixDispatch: [String: Int]
     let matrixShortcut: [String: Bool]
     let matrixEditor: [String: Bool]
+    let secure: [String: Bool]
+    let secureCounts: [String: Int]
 }
 
 struct IsolationChildMailboxSnapshot: Sendable {
@@ -63,6 +65,8 @@ private struct IsolationChildWireReply: Decodable {
     let matrixDispatch: [String: Int]?
     let matrixShortcut: [String: Bool]?
     let matrixEditor: [String: Bool]?
+    let secure: [String: Bool]?
+    let secureCounts: [String: Int]?
 
     enum CodingKeys: String, CodingKey {
         case version = "v"
@@ -71,7 +75,7 @@ private struct IsolationChildWireReply: Decodable {
         case ordinaryContinuationTextMatches, ordinaryContinuationSelectionMatches
         case ordinaryWakeReleaseObserved
         case received, changeCount, foreignInput, overflow, active, focused, reason
-        case matrixArmed, matrixLocal, matrixDispatch, matrixShortcut, matrixEditor
+        case matrixArmed, matrixLocal, matrixDispatch, matrixShortcut, matrixEditor, secure, secureCounts
     }
 }
 
@@ -152,12 +156,14 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
     }
 
     private func decode(_ data: Data) -> IsolationChildMessage? {
+        let kinds = ["ready", "configured", "selected", "matrix_armed", "snapshot", "exiting", "secure_input"]
         guard let reply = try? JSONDecoder().decode(IsolationChildWireReply.self, from: data),
               reply.version == 1, reply.nonce == nonce, reply.pid == target, reply.senderPID == sender,
               (0...32).contains(reply.sequence), reply.changeCount >= 0,
-              ["ready", "configured", "selected", "matrix_armed", "snapshot", "exiting"].contains(reply.kind),
+              kinds.contains(reply.kind),
               reply.received.count <= RecoveryIsolationWire.maximumObservations,
-              reply.received.allSatisfy({ RecoveryIsolationLabel(rawValue: $0) != nil }), validMatrix(reply) else {
+              reply.received.allSatisfy({ RecoveryIsolationLabel(rawValue: $0) != nil }),
+              validMatrix(reply), validSecure(reply) else {
             return nil
         }
         let continuationText: Bool = reply.ordinaryContinuationTextMatches ?? false
@@ -168,6 +174,8 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
         let matrixDispatch: [String: Int] = reply.matrixDispatch ?? [:]
         let matrixShortcut: [String: Bool] = reply.matrixShortcut ?? [:]
         let matrixEditor: [String: Bool] = reply.matrixEditor ?? [:]
+        let secure: [String: Bool] = reply.secure ?? [:]
+        let secureCounts: [String: Int] = reply.secureCounts ?? [:]
         return IsolationChildMessage(
             sequence: reply.sequence, kind: reply.kind, processID: target, windowTitle: reply.windowTitle,
             fixtureTextUnchanged: reply.fixtureTextUnchanged,
@@ -179,8 +187,18 @@ final class RecoveryIsolationChildMailbox: @unchecked Sendable {
             received: reply.received, changeCount: reply.changeCount, foreignInput: reply.foreignInput,
             overflow: reply.overflow, active: reply.active, focused: reply.focused, reason: reply.reason,
             matrixArmed: matrixArmed, matrixLocal: matrixLocal,
-            matrixDispatch: matrixDispatch, matrixShortcut: matrixShortcut, matrixEditor: matrixEditor
+            matrixDispatch: matrixDispatch, matrixShortcut: matrixShortcut, matrixEditor: matrixEditor,
+            secure: secure, secureCounts: secureCounts
         )
+    }
+
+    private func validSecure(_ reply: IsolationChildWireReply) -> Bool {
+        guard reply.secure != nil || reply.secureCounts != nil else { return reply.kind != "secure_input" }
+        guard reply.matrixArmed != true, let secure = reply.secure, let counts = reply.secureCounts,
+              Set(secure.keys) == ["enabled", "owned", "refused"], Set(counts.keys) == ["enable", "disable"],
+              let enables = counts["enable"], let disables = counts["disable"],
+              (0...1).contains(enables), (0...1).contains(disables), disables <= enables else { return false }
+        return secure["owned"] != true || enables == 1
     }
 
     private func validMatrix(_ reply: IsolationChildWireReply) -> Bool {

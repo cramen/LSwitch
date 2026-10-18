@@ -33,19 +33,29 @@ final class AppConversionDispatch {
         #if DEBUG
         let prefix = "--recovery-textedit-pilot="
         let values = CommandLine.arguments.filter { $0.hasPrefix("--recovery-textedit-pilot") }
-        guard !values.isEmpty else { return true }
+        let faults = CommandLine.arguments.filter { $0.hasPrefix("--recovery-textedit-fault") }
+        guard !values.isEmpty else { return faults.isEmpty }
         guard values.count == 1, let value = values.first, value.hasPrefix(prefix), pilot == nil else { return false }
         let path = String(value.dropFirst(prefix.count))
-        guard path.hasPrefix("/"), path.utf8.count <= 4096 else { return false }
-        let prepared = AppRecoveryPilot(testDocument: URL(fileURLWithPath: path),
+        guard path.hasPrefix("/"), path.utf8.count <= 4096, let fault = faultMode(faults) else { return false }
+        let prepared = AppRecoveryPilot(testDocument: URL(fileURLWithPath: path), faultMode: fault,
                                        eventTap: eventTap, currentSafety: currentSafety)
         prepared.onAvailabilityChange = onAvailability
         pilot = prepared
         #else
-        if CommandLine.arguments.contains(where: { $0.hasPrefix("--recovery-textedit-pilot") }) { return false }
+        if CommandLine.arguments.contains(where: { $0.hasPrefix("--recovery-textedit-") }) { return false }
         #endif
         return true
     }
+
+    #if DEBUG
+    private func faultMode(_ values: [String]) -> TextEditRecoveryFaultMode? {
+        guard !values.isEmpty else { return TextEditRecoveryFaultMode.none }
+        let prefix = "--recovery-textedit-fault="
+        guard values.count == 1, let value = values.first, value.hasPrefix(prefix) else { return nil }
+        return TextEditRecoveryFaultMode(rawValue: String(value.dropFirst(prefix.count)))
+    }
+    #endif
 
     func perform(
         operation: @MainActor () async -> Converter.Outcome,

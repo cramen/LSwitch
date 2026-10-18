@@ -15,10 +15,12 @@ final class AppRecoveryPilot {
     private var quitPending = false
 
     init(
-        testDocument: URL, eventTap: @escaping @MainActor () -> EventTapCore?,
+        testDocument: URL, faultMode: TextEditRecoveryFaultMode,
+        eventTap: @escaping @MainActor () -> EventTapCore?,
         currentSafety: @escaping @MainActor () -> Bool
     ) {
-        runtime = TextEditRecoveryRuntime(testDocument: testDocument, eventTap: eventTap, currentSafety: currentSafety)
+        runtime = TextEditRecoveryRuntime(testDocument: testDocument, faultMode: faultMode,
+                                          eventTap: eventTap, currentSafety: currentSafety)
         window.prepare()
         runtime.onStateChange = { [weak self] in self?.refresh() }
     }
@@ -48,8 +50,16 @@ final class AppRecoveryPilot {
     private func refresh() {
         let metadata = runtime.metadata
         let state = runtime.status
-        let signature = "stage=\(runtime.diagnosticStage) pending=\(state.hasPending) unsettled=\(state.hasUnsettled) "
+        var signature = "stage=\(runtime.diagnosticStage) pending=\(state.hasPending) unsettled=\(state.hasUnsettled) "
             + "metadata=\(state.metadataReady) events=\(metadata?.counts.events ?? 0)"
+        if let fault = runtime.faultReport {
+            signature += " fault=\(fault.phase.rawValue) selectionAttempts=\(fault.selectionAttempts) "
+                + "selectionSucceeded=\(fault.selectionSucceeded) selected=\(fault.selectedRangeObserved) "
+                + "prefixEvents=\(fault.capturedEvents) "
+                + "countReads=\(fault.payloadCountReads) prefixBytes=\(fault.capturedUTF16Bytes) "
+                + "missingReads=\(fault.missingSnapshotReads) blockedWrites=\(fault.blockedWrites)"
+        }
+        if let profile = runtime.profileReport { signature += " " + profileSummary(profile) }
         if diagnosticSignature != signature {
             diagnosticSignature = signature
             logger.notice("\(signature, privacy: .public)")
@@ -62,6 +72,20 @@ final class AppRecoveryPilot {
         }
         announcedRecord = metadata.recordIdentifier
         show()
+    }
+
+    private func profileSummary(_ report: TextEditRecoveryProfileReport) -> String {
+        [
+            "request=\(report.requestIsValid.count):\(report.requestIsValid.nanoseconds)",
+            "source=\(report.source.count):\(report.source.nanoseconds)",
+            "protected=\(report.protectedField.count):\(report.protectedField.nanoseconds)",
+            "focus=\(report.focus.count):\(report.focus.nanoseconds)",
+            "foreground=\(report.foreground.count):\(report.foreground.nanoseconds)",
+            "context=\(report.context.count):\(report.context.nanoseconds)",
+            "snapshotInclusive=\(report.snapshotInclusive.count):\(report.snapshotInclusive.nanoseconds)",
+            "profileFault=\(report.profileFault ?? "none")",
+            "logicalFailure=\(report.logicalFailure ?? "none")"
+        ].joined(separator: " ")
     }
 
     /// Возвращаем решение NSApplication лишь после RAM handover и подтверждённого локального cleanup.

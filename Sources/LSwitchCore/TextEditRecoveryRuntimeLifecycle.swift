@@ -17,11 +17,15 @@ extension TextEditRecoveryRuntime {
         let driverStopped = mayRelease ? await stopDriver(attempt) : false
         let disposition = logicalDisposition(attempt)
         let processingActions = EventProcessingActions(
-            applyOutcome: { actions.applyOutcome(outcome) }, reset: actions.reset, consume: actions.consume,
+            applyOutcome: { [weak self, weak attempt] in
+                if let self, let attempt { self.recordProfileReport(attempt) }
+                actions.applyOutcome(outcome)
+            }, reset: actions.reset, consume: actions.consume,
             didFinish: { [weak self, weak attempt] in
                 guard let self, let attempt, self.attempt === attempt else { return }
                 attempt.invocationFinished = true
                 attempt.finishing = false
+                self.recordProfileReport(attempt)
                 if driverStopped && mayRelease { self.attempt = nil }
                 if attempt.adapter?.ordinaryCompleted == true { self.setStage(.completed) } else {
                     self.onStateChange()
@@ -40,6 +44,7 @@ extension TextEditRecoveryRuntime {
             finish = .discarded
         }
         attempt.finishing = false
+        recordProfileReport(attempt, finish: finish)
         guard finish != .stale else { onStateChange(); return false }
         return true
     }

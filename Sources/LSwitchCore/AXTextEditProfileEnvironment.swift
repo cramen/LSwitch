@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Carbon
 import Darwin
 import Foundation
 
@@ -7,44 +8,83 @@ extension AXProfileEnvironment {
     /// Явный helper для проверенного TextEdit. Обычный AXTextConverter его не использует.
     static func textEditCandidate() -> Self {
         let access = SystemAXTextAccess()
+        let context = AXTextEditContextReader(access: AXTextEditProfileEnvironment.contextAccess)
         return .init(activeSource: { UnicodeInputSource.current() },
-                     focusedElement: { access.focusedElement() }, isProtected: { access.isProtected($0) },
-                     context: { AXTextEditProfileEnvironment.context($0) }, snapshot: { element, canRead in
+                     focusedElement: { access.focusedElement() },
+                     isProtected: { AXTextEditProfileEnvironment.isProtected($0) },
+                     context: { context.context($0) }, snapshot: { element, canRead in
             AXProfileSnapshotReader(readCount: {
                 AXTextEditProfileEnvironment.attribute(kAXNumberOfCharactersAttribute, element) as? Int
             }, readText: { range in
                 AXTextEditProfileEnvironment.string(in: element, range: range)
             }, readSelection: { access.selection(in: element) }).read(canRead: canRead)
-        })
+        }, foregroundProcessID: { NSWorkspace.shared.frontmostApplication?.processIdentifier })
     }
 }
 
 @MainActor
 private enum AXTextEditProfileEnvironment {
-    static func context(_ element: AXUIElement) -> AXProfileContext? {
+    static var contextAccess: AXTextEditContextAccess {
+        .init(processID: processID, processIdentity: { SystemProcessIdentity.read(processID: $0) },
+              application: application, versions: versions, elementMetadata: elementMetadata,
+              windowDocument: windowDocument)
+    }
+
+    private static func processID(_ element: AXUIElement) -> Int32? {
         var processID: pid_t = 0
-        guard AXUIElementGetPid(element, &processID) == .success,
-              let process = SystemProcessIdentity.read(processID: processID),
-              let application = NSRunningApplication(processIdentifier: processID),
-              application.bundleIdentifier == "com.apple.TextEdit", let url = application.bundleURL,
-              let bundle = Bundle(url: url),
+        return AXUIElementGetPid(element, &processID) == .success ? processID : nil
+    }
+
+    private static func application(_ processID: Int32) -> AXProfileApplicationIdentity? {
+        guard let application = NSRunningApplication(processIdentifier: processID),
+              let identifier = application.bundleIdentifier, let url = application.bundleURL else { return nil }
+        return .init(bundleIdentifier: identifier, bundleURL: url)
+    }
+
+    private static func versions(_ url: URL) -> AXProfileVersionMetadata? {
+        guard let bundle = Bundle(url: url),
               let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
               let build = bundle.object(forInfoDictionaryKey: "CFBundleVersion") as? String,
-              let windowValue = attribute(kAXWindowAttribute, element),
-              CFGetTypeID(windowValue) == AXUIElementGetTypeID(),
-              let role = attribute(kAXRoleAttribute, element) as? String,
-              let document = SystemAutomaticTextContext.documentIdentity(in: element),
               let systemBuild = Self.systemBuild() else { return nil }
-        // swiftlint:disable:next force_cast
-        let window = windowValue as! AXUIElement
-        var windowPID: pid_t = 0
-        guard AXUIElementGetPid(window, &windowPID) == .success, windowPID == processID else { return nil }
         let system = ProcessInfo.processInfo.operatingSystemVersion
         let systemVersion = "\(system.majorVersion).\(system.minorVersion)"
         guard system.patchVersion == 0 else { return nil }
-        return .init(process: process, window: window, document: document,
-                     bundleIdentifier: "com.apple.TextEdit", applicationVersion: version, applicationBuild: build,
-                     systemVersion: systemVersion, systemBuild: systemBuild, role: role)
+        return .init(applicationVersion: version, applicationBuild: build,
+                     systemVersion: systemVersion, systemBuild: systemBuild)
+    }
+
+    private static func elementMetadata(_ element: AXUIElement) -> AXTextEditElementMetadata? {
+        guard let values = attributeValues(AXTextEditElementMetadata.attributes, in: element) else { return nil }
+        return AXTextEditElementMetadata.decode(values)
+    }
+
+    static func isProtected(_ element: AXUIElement) -> Bool {
+        guard !IsSecureEventInputEnabled() else { return true }
+        let values = attributeValues(AXProfileProtectionMetadata.attributes, in: element)
+        return AXProfileProtectionMetadata.isProtected(values) || IsSecureEventInputEnabled()
+    }
+
+    private static func attributeValues(_ names: [String], in element: AXUIElement) -> [CFTypeRef]? {
+        SystemAXTextAccess.limitMessaging(element)
+        var values: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(
+            element, names as CFArray, [], &values
+        ) == .success, let values, CFArrayGetCount(values) == names.count else { return nil }
+        var result: [CFTypeRef] = []
+        for index in 0..<names.count {
+            guard let value = CFArrayGetValueAtIndex(values, index) else { return nil }
+            result.append(Unmanaged<AnyObject>.fromOpaque(value).takeUnretainedValue())
+        }
+        return result
+    }
+
+    private static func windowDocument(_ window: AXUIElement) -> AXProfileDocumentValue {
+        SystemAXTextAccess.limitMessaging(window)
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(window, kAXDocumentAttribute as CFString, &value)
+        if result == .noValue { return .missing }
+        guard result == .success, let document = value as? String else { return .unavailable }
+        return .value(document)
     }
 
     static func attribute(_ name: String, _ element: AXUIElement) -> CFTypeRef? {

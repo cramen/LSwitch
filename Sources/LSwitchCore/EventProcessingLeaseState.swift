@@ -193,6 +193,14 @@ final class EventProcessingLeaseState: @unchecked Sendable {
                      armed: current?.armed ?? false, failure: current?.failure)
     }
 
+    /// Только сохранённая причина exact lease; чтение отчёта само не продлевает и не истекает lease.
+    func failure(for lease: EventProcessingLease) -> EventProcessingInvalidation? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard current?.lease == lease else { return nil }
+        return current?.failure
+    }
+
     private func expire(_ record: Record, at now: UInt64) {
         if now >= record.deadline { invalidate(record, reason: .expired) }
     }

@@ -14,6 +14,7 @@ final class TextEditMemoryDriver: TextEditRecoveryDriver, @unchecked Sendable {
     private var stopCounter = 0
     @MainActor var flush: RecipientOrdinaryFlush?
     @MainActor var wake: CGEvent?
+    @MainActor var onWake: () -> Void = {}
 
     init(bridge: RecoveryRecipientProbeBridge, state: RecipientTapDriverState, clock: EventProcessingTestClock) {
         self.bridge = bridge
@@ -63,7 +64,7 @@ final class TextEditMemoryDriver: TextEditRecoveryDriver, @unchecked Sendable {
         claimOwnership: () -> ConversionSafetyInputClaim?
     ) -> ConversionOrdinaryAcceptance {
         flush.accept(correction: correction, claimOwnership: claimOwnership,
-                     postWake: { event in self.wake = event; return true })
+                     postWake: { event in self.wake = event; self.onWake(); return true })
     }
 
     @MainActor
@@ -75,7 +76,7 @@ final class TextEditMemoryDriver: TextEditRecoveryDriver, @unchecked Sendable {
 
 @MainActor
 final class TextEditRecoveryAdapterFixture {
-    let ledger = ConversionSafetyLedger(generation: 1)
+    let ledger: ConversionSafetyLedger
     let clock = EventProcessingTestClock()
     let router = RecoveryCaptureRouter(bypassRawProcessing: true, acceptsRecipientInput: true)
     let processing = EventProcessingLeaseState()
@@ -84,7 +85,14 @@ final class TextEditRecoveryAdapterFixture {
     let adapter: TextEditRecoveryAdapter
     let attachment: RecoveryCaptureAttachment
 
-    init() throws {
+    init(
+        ledger: ConversionSafetyLedger? = nil, validationScope: TextEditRecoveryValidationScope? = nil,
+        startedAt: UInt64 = 1, currentSafety: @escaping () -> Bool = { true },
+        contextIsCurrent: @escaping () -> Bool = { true }
+    ) throws {
+        let ledger = ledger ?? ConversionSafetyLedger(generation: 1)
+        self.ledger = ledger
+        clock.advance(to: startedAt)
         let target = try XCTUnwrap(SystemProcessIdentity.read(processID: getpid()))
         let scope = RecoveryOperationTarget(operation: ledger.operation, target: target)
         let gate = try XCTUnwrap(RecipientGateState(scope: scope))
@@ -99,7 +107,7 @@ final class TextEditRecoveryAdapterFixture {
         }))
         self.coordinator = coordinator
         let clock = self.clock
-        let lease = try XCTUnwrap(processing.begin(scope: scope, at: 1))
+        let lease = try XCTUnwrap(processing.begin(scope: scope, at: startedAt))
         let arm = try XCTUnwrap(PreparedEventProcessingArm(state: processing, lease: lease, clock: { clock.read() }))
         let admission = try XCTUnwrap(coordinator.reserve(operation: ledger.operation, target: target))
         let operation = try XCTUnwrap(RecoveryOperation.prepare(
@@ -125,7 +133,8 @@ final class TextEditRecoveryAdapterFixture {
             })
         adapter = TextEditRecoveryAdapter(resources: .init(ledger: ledger, coordinator: coordinator,
             driver: driver, operation: operation, capture: capture, logical: logical),
-            contextIsCurrent: { true }, currentSafety: { true }, changed: {})
+            contextIsCurrent: contextIsCurrent, currentSafety: currentSafety, changed: {},
+            validationScope: validationScope)
     }
 
     func activate() async {

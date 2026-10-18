@@ -2,48 +2,6 @@ import ApplicationServices
 import Foundation
 import os
 
-/// Границы последнего слова в строке — чистая логика AX-конвертера,
-/// вынесенная для unit-тестов.
-public enum WordBoundary {
-
-    /// Символ слова: буква любого алфавита ИЛИ символ с соответствием
-    /// в раскладке («;» — это «ж», «'» — «э»): на экране может оказаться
-    /// текст, набранный в неправильной раскладке. Хвостовая пунктуация
-    /// после извлечения обрезается (см. lastWord).
-    public static func isWordCharacter(_ character: Character) -> Bool {
-        character.isLetter || LayoutMap.shared.layout(of: character) != nil
-    }
-
-    /// Последнее слово перед позицией курсора.
-    ///
-    /// Курсор может стоять сразу после разделителя («слово |») — сначала
-    /// отступаем за разделители, затем берём непрерывный ряд букв.
-    /// - Returns: диапазон слова или `nil`, если слова перед курсором нет.
-    public static func lastWord(in text: String, beforeCursor cursor: String.Index) -> Range<String.Index>? {
-        var end = cursor
-        while end > text.startIndex {
-            let previous = text[text.index(before: end)]
-            if isWordCharacter(previous) { break }
-            end = text.index(before: end)
-        }
-        var start = end
-        while start > text.startIndex {
-            let previous = text[text.index(before: start)]
-            guard isWordCharacter(previous) else { break }
-            start = text.index(before: start)
-        }
-        // Хвостовая пунктуация («привет,») не входит в слово, внутренняя
-        // раскладочная («rf;tncz») — входит.
-        while end > start {
-            let last = text[text.index(before: end)]
-            guard !last.isLetter else { break }
-            end = text.index(before: end)
-        }
-        guard start < end else { return nil }
-        return start..<end
-    }
-}
-
 /// Ошибки AX-режима конвертации.
 public enum AXConvertError: Error, Equatable {
     /// Нет сфокусированного элемента (или нет разрешения Accessibility).
@@ -150,15 +108,14 @@ public final class AXTextConverter: ConversionEngine {
               !access.isProtected(element) else {
             return (logged(.blocked, reason: "protected-or-invalid-context"), false)
         }
-        let context = request.isAutomatic ? access.automaticContext(in: element) : .prose
-        let identity = request.isAutomatic ? context.documentIdentity : access.documentIdentity(in: element)
-        let targetCheck = ConversionDocumentTarget.check(identity: identity, read: {
-            self.access.documentIdentity(in: element)
-        })
-        let scoped = request.checkingDocumentContext(context, read: { self.access.automaticContext(in: element) })
-        let request = request.isAutomatic ? scoped : scoped.checkingTarget(targetCheck)
-        guard isCurrent(element, request: request) else { return (.blocked, false) }
-        guard mutation.bind(to: element) else {
+        if mutation.isCanonicalProfileCandidate, !mutation.bind(to: element) {
+            return (logged(.blocked, reason: "receiver-contract-unavailable"), false)
+        }
+        guard let scope = AXTextConversionScope(request: request, element: element, access: access, mutation: mutation)
+        else { return (.blocked, false) }
+        let request = scope.request
+        guard isCurrent(element, request: request, mutation: mutation) else { return (.blocked, false) }
+        guard mutation.hasCanonicalProfileBoundary || mutation.bind(to: element, validating: request) else {
             return (logged(.blocked, reason: "receiver-contract-unavailable"), false)
         }
         guard let initial = initialState(in: element, mutation: mutation) else {
@@ -169,7 +126,8 @@ public final class AXTextConverter: ConversionEngine {
             let reason = mutation.observeNoWork(initial) ? "no-word-observed" : "snapshot-or-plan-unavailable"
             return (logged(.unavailable, reason: reason), false)
         }
-        guard request.permitsAutomaticContext(context, plan: plan), isCurrent(element, request: request) else {
+        guard request.permitsAutomaticContext(scope.context, plan: plan),
+              isCurrent(element, request: request, mutation: mutation) else {
             return (logged(.blocked, reason: "automatic-context-not-permitted"), plan.wasSelection)
         }
         guard access.canReplaceText(in: element), access.canSetSelection(in: element) else {
@@ -178,7 +136,7 @@ public final class AXTextConverter: ConversionEngine {
         let result = await replace(plan, in: element, request: request, mutation: mutation)
         await recordFinalCleanup(result, plan: plan, in: element, request: request, mutation: mutation)
         if case .success(let receipt) = result {
-            return (.success(receipt.checkingTarget(targetCheck)), plan.wasSelection)
+            return (.success(scope.wrap(receipt, finalSelection: plan.finalSelection)), plan.wasSelection)
         }
         return (result, plan.wasSelection)
     }
@@ -192,9 +150,9 @@ public final class AXTextConverter: ConversionEngine {
         case .success:
             mutation.recordCleanup(.recoveredObserved) {
                 if mutation.isProfileMode {
-                    return self.isCurrent(element, request: request)
+                    return self.isCurrent(element, request: request, mutation: mutation)
                         && mutation.observeProfileFinal(.init(plan.resultingText, plan.finalSelection))
-                        && self.isCurrent(element, request: request)
+                        && self.isCurrent(element, request: request, mutation: mutation)
                 }
                 return self.isCurrent(element, request: request)
                     && mutation.textMatches(self.access.text(in: element), plan.resultingText)
@@ -218,39 +176,64 @@ public final class AXTextConverter: ConversionEngine {
         request: ConversionRequest,
         mutation: AXMutationSafety
     ) async -> ConversionResult {
-        guard isCurrent(element, request: request),
+        guard isCurrent(element, request: request, mutation: mutation),
               matchesState(.init(plan.text, plan.selection), in: element, mutation: mutation) else {
             return logged(.blocked, reason: "snapshot-changed-before-selection")
         }
-        guard request.beginMutation(), isCurrent(element, request: request) else {
+        guard request.beginMutation(), isCurrent(element, request: request, mutation: mutation) else {
             return logged(.blocked, reason: "input-hold-unavailable")
         }
         if plan.range != plan.selection {
-            guard mutation.writeSelection(plan.range, in: element, access: access,
-                                          isValid: { self.isCurrent(element, request: request) }) else {
+            guard writeSelection(plan.range, in: element, request: request, mutation: mutation) else {
                 return logged(.failed, reason: "selection-write-failed")
             }
             let settled = await settle(
                 expected: (plan.text, plan.range), allowed: [plan.selection, plan.range],
-                in: element, mutation: mutation, isValid: { self.isCurrent(element, request: request) }
+                in: element, mutation: mutation,
+                observation: .selectedRangeSettled,
+                isValid: { self.isCurrent(element, request: request, mutation: mutation) }
             )
             guard settled else {
-                let result: ConversionResult = isCurrent(element, request: request) ? .failed : .blocked
+                let result: ConversionResult = isCurrent(element, request: request, mutation: mutation)
+                    ? .failed : .blocked
                 return logged(result, reason: "selection-not-settled")
             }
-            guard mutation.requireCompletion(.selectedRangeSettled, expected: .init(plan.text, plan.range)) else {
+            guard mutation.hasCanonicalProfileBoundary
+                || mutation.requireCompletion(.selectedRangeSettled, expected: .init(plan.text, plan.range)) else {
                 return logged(.failed, reason: "selection-completion-unconfirmed")
             }
         }
-        guard isCurrent(element, request: request),
+        guard isCurrent(element, request: request, mutation: mutation),
               matchesState(.init(plan.text, plan.range), in: element, mutation: mutation) else {
             return logged(.blocked, reason: "context-changed-after-selection")
         }
-        guard mutation.writeText(plan.replacement, in: element, access: access,
-                                 isValid: { self.isCurrent(element, request: request) }) else {
+        guard writeText(plan.replacement, in: element, request: request, mutation: mutation) else {
             return logged(.failed, reason: "text-write-failed")
         }
         return await finishWrite(plan, in: element, request: request, mutation: mutation)
+    }
+}
+
+extension AXTextConverter {
+    private func writeSelection(
+        _ range: NSRange, in element: AXUIElement, request: ConversionRequest,
+        mutation: AXMutationSafety, restoring: Bool = false
+    ) -> Bool {
+        if mutation.hasCanonicalProfileBoundary {
+            return mutation.writeCanonicalSelection(range, in: element, access: access, restoring: restoring)
+        }
+        return mutation.writeSelection(range, in: element, access: access, restoring: restoring,
+                                       isValid: { self.isCurrent(element, request: request) })
+    }
+
+    private func writeText(
+        _ text: String, in element: AXUIElement, request: ConversionRequest, mutation: AXMutationSafety
+    ) -> Bool {
+        if mutation.hasCanonicalProfileBoundary {
+            return mutation.writeCanonicalText(text, in: element, access: access)
+        }
+        return mutation.writeText(text, in: element, access: access,
+                                  isValid: { self.isCurrent(element, request: request) })
     }
 
     private func finishWrite(
@@ -259,32 +242,39 @@ public final class AXTextConverter: ConversionEngine {
         request: ConversionRequest,
         mutation: AXMutationSafety
     ) async -> ConversionResult {
-        guard isCurrent(element, request: request),
+        guard isCurrent(element, request: request, mutation: mutation),
               mutation.isProfileMode || mutation.textMatches(access.text(in: element), plan.resultingText) else {
             return logged(.failed, reason: "text-write-not-confirmed")
         }
         let inserted = NSRange(location: plan.range.location, length: plan.replacement.utf16.count)
         let wordCaret = NSRange(location: plan.range.location + plan.receipt.converted.utf16.count, length: 0)
         let known = [inserted, plan.finalSelection, wordCaret]
-        guard mutation.requireCompletion(.replacementObserved,
-                                         expected: .init(text: plan.resultingText, selections: known)) else {
-            return logged(.failed, reason: "text-completion-unconfirmed")
+        let current: NSRange?
+        if mutation.isProfileMode {
+            guard let observed = mutation.confirmedProfileReplacementSelection(
+                .init(text: plan.resultingText, selections: known)
+            ) else { return logged(.failed, reason: "text-completion-unconfirmed") }
+            current = observed
+        } else {
+            guard mutation.requireCompletion(.replacementObserved) else {
+                return logged(.failed, reason: "text-completion-unconfirmed")
+            }
+            current = access.selection(in: element)
         }
-        let current = mutation.isProfileMode
-            ? mutation.profileRead(.init(text: plan.resultingText, selections: known))?.selection
-            : access.selection(in: element)
         guard let current, known.contains(current),
-              isCurrent(element, request: request),
-              mutation.writeSelection(plan.finalSelection, in: element, access: access, restoring: true,
-                                      isValid: { self.isCurrent(element, request: request) }) else {
+              isCurrent(element, request: request, mutation: mutation),
+              writeSelection(plan.finalSelection, in: element, request: request,
+                             mutation: mutation, restoring: true) else {
             return logged(.failed, reason: "final-caret-write-failed")
         }
         let settled = await settle(
             expected: (plan.resultingText, plan.finalSelection), allowed: known,
-            in: element, mutation: mutation, isValid: { self.isCurrent(element, request: request) }
+            in: element, mutation: mutation,
+            observation: .finalStateSettled,
+            isValid: { self.isCurrent(element, request: request, mutation: mutation) }
         )
         guard settled else { return logged(.failed, reason: "final-state-not-settled") }
-        guard mutation.requireCompletion(.finalStateSettled,
+        guard mutation.hasCanonicalProfileBoundary || mutation.requireCompletion(.finalStateSettled,
                                          expected: .init(plan.resultingText, plan.finalSelection)) else {
             return logged(.failed, reason: "final-caret-completion-unconfirmed")
         }
@@ -323,9 +313,14 @@ public final class AXTextConverter: ConversionEngine {
 
     private func settle(
         expected: SelectionSettlement.State, allowed: [NSRange],
-        in element: AXUIElement, mutation: AXMutationSafety, isValid: () -> Bool
+        in element: AXUIElement, mutation: AXMutationSafety,
+        observation: AXWriteObservation? = nil, isValid: () -> Bool
     ) async -> Bool {
-        await SelectionSettlement.wait(
+        if mutation.hasCanonicalProfileBoundary, let observation {
+            return await mutation.settleCanonical(observation, expected: .init(expected.text, expected.selection),
+                                                  pause: { await self.access.waitForUpdate() })
+        }
+        return await SelectionSettlement.wait(
             expected: expected, allowedSelections: allowed, isValid: isValid,
             read: {
                 if mutation.isProfileMode {
@@ -342,7 +337,10 @@ public final class AXTextConverter: ConversionEngine {
         )
     }
 
-    private func isCurrent(_ element: AXUIElement, request: ConversionRequest, cleanup: Bool = false) -> Bool {
+    private func isCurrent(
+        _ element: AXUIElement, request: ConversionRequest, mutation: AXMutationSafety? = nil, cleanup: Bool = false
+    ) -> Bool {
+        if !cleanup, let mutation, mutation.hasCanonicalProfileBoundary { return mutation.canonicalProfileIsCurrent() }
         let tracked = request.safetyLedger != nil
         guard cleanup || !tracked || !Task.isCancelled,
               cleanup ? request.canCleanup() : request.isValid(),

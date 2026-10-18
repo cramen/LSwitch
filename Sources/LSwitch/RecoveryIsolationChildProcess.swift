@@ -12,6 +12,7 @@ final class RecoveryIsolationChildProcess {
     private let writer = DispatchQueue(label: "LSwitch.isolation-parent.writer")
     private var sequence = 0
     private var started = false
+    private let secureWatchdog = RecoveryIsolationSecureWatchdog()
 
     var processID: Int32 { started ? process.processIdentifier : 0 }
     var isRunning: Bool { started && process.isRunning }
@@ -70,6 +71,18 @@ final class RecoveryIsolationChildProcess {
         }
         return next
     }
+
+    /// Только этот уже запущенный Foundation Process; действие не зависит от main run loop.
+    func armSecureWatchdog() -> Bool {
+        guard isRunning else { return false }
+        let process = self.process
+        return secureWatchdog.arm(action: {
+            if process.isRunning { process.terminate() }
+        })
+    }
+
+    func cancelSecureWatchdog() { secureWatchdog.cancel() }
+    var secureWatchdogFired: Bool { secureWatchdog.didFire }
 
     func take() -> IsolationChildMailboxSnapshot? { mailbox?.take() }
 

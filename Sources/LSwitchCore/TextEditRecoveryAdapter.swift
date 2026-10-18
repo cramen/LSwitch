@@ -8,6 +8,7 @@ final class TextEditRecoveryAdapter: ConversionRecoveryAdapter {
     private let contextIsCurrent: Converter.ContextCheck
     private let currentSafety: () -> Bool
     private let changed: () -> Void
+    private let validationScope: TextEditRecoveryValidationScope?
     private var registered = false
     private var armed = false
     private var invalidated = false
@@ -27,12 +28,14 @@ final class TextEditRecoveryAdapter: ConversionRecoveryAdapter {
 
     init(
         resources: TextEditRecoveryAdapterResources, contextIsCurrent: @escaping Converter.ContextCheck,
-        currentSafety: @escaping () -> Bool, changed: @escaping () -> Void
+        currentSafety: @escaping () -> Bool, changed: @escaping () -> Void,
+        validationScope: TextEditRecoveryValidationScope? = nil
     ) {
         self.resources = resources
         self.contextIsCurrent = contextIsCurrent
         self.currentSafety = currentSafety
         self.changed = changed
+        self.validationScope = validationScope
     }
 
     var isCaptureValid: Bool {
@@ -44,6 +47,7 @@ final class TextEditRecoveryAdapter: ConversionRecoveryAdapter {
     }
 
     var isOrdinaryRouteCurrent: Bool { isCaptureValid }
+    var supportsProfileValidation: Bool { validationScope != nil }
     var hasPending: Bool { !ordinaryCompleted }
     var hasUnsettled: Bool { retirement != nil || stopping != nil || (!adopted && !ordinaryCompleted) }
 
@@ -62,6 +66,20 @@ final class TextEditRecoveryAdapter: ConversionRecoveryAdapter {
 
     func beginMutation() -> Bool { isCaptureValid }
     func drainPendingInput() async { await resources.logical.drain() }
+
+    /// Callback-bearing проверки выполняются только до canonical AX target boundary.
+    func beginProfileValidation() -> Bool {
+        guard registered, armed, !invalidated, !Task.isCancelled,
+              validationScope?.isCurrent == true, currentSafety(),
+              resources.logical.isCurrent(), resources.capture.isCurrent else { return false }
+        return finishProfileValidation(at: DispatchTime.now().uptimeNanoseconds)
+    }
+
+    /// В closing нет injected clock, host safety, context или gate callbacks.
+    func finishProfileValidation(at now: UInt64) -> Bool {
+        registered && armed && !invalidated && !Task.isCancelled && validationScope?.isCurrent == true
+            && resources.logical.prepared.isCurrent(at: now) && resources.capture.isCurrentLocally(at: now)
+    }
 
     func prepareOrdinary() -> Bool {
         guard flush == nil, isCaptureValid,
@@ -114,6 +132,9 @@ final class TextEditRecoveryAdapter: ConversionRecoveryAdapter {
     }
 
     func retainForRecovery(claim: ConversionSafetyInputClaim?) {
+        if resources.ledger.submissionCount > 0, !resources.ledger.permitsConfirmedResult {
+            reason = .cleanupUnconfirmed
+        }
         invalidated = true
         resources.logical.prepared.invalidate(.stopped)
         resources.capture.invalidate()

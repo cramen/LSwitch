@@ -13,6 +13,7 @@ public struct ConversionRequest: Sendable {
     public let beginMutation: @MainActor @Sendable () -> Bool
     public let canCleanup: @MainActor @Sendable () -> Bool
     public let isValid: @MainActor @Sendable () -> Bool
+    private(set) var profileValidation: AXProfileRequestValidation?
 
     public init(
         expectedWord: String? = nil,
@@ -36,6 +37,22 @@ public struct ConversionRequest: Sendable {
         self.beginMutation = beginMutation
         self.canCleanup = canCleanup ?? isValid
         self.isValid = isValid
+    }
+
+    /// Только этот initializer строит canonical closures; public init и guard wrappers не получают provenance.
+    @MainActor
+    init(canonical input: CanonicalConversionRequestInput, session: ConversionRecoverySession) {
+        self.init(expectedWord: input.expectedWord, trailingText: input.trailingText, replacement: input.replacement,
+                  sourceLayout: input.sourceLayout, useSelection: input.useSelection, diagnostics: input.diagnostics,
+                  safetyLedger: session.ledger,
+                  beginMutation: { [weak session] in session?.beginMutation() == true },
+                  canCleanup: { [weak session] in session?.canCleanup == true },
+                  isValid: { [weak session] in session?.isValid == true })
+        if input.replacement == nil {
+            profileValidation = session.makeProfileValidation()
+        } else if let anchor = input.undoAnchor, anchor.matches(input) {
+            profileValidation = session.makeProfileValidation(undoAnchor: anchor)
+        }
     }
 
     public var expectedSpan: String? {
@@ -94,6 +111,7 @@ public struct ConversionReceipt: Equatable, Sendable {
     public let converted: String
     public let trailingText: String
     public let targetIsCurrent: TargetCheck?
+    let profileTarget: AXProfileReceiptTarget?
 
     public init(
         original: String, converted: String, trailingText: String = "", targetIsCurrent: TargetCheck? = nil
@@ -102,6 +120,15 @@ public struct ConversionReceipt: Equatable, Sendable {
         self.converted = converted
         self.trailingText = trailingText
         self.targetIsCurrent = targetIsCurrent
+        profileTarget = nil
+    }
+
+    init(original: String, converted: String, trailingText: String, profileTarget: AXProfileReceiptTarget) {
+        self.original = original
+        self.converted = converted
+        self.trailingText = trailingText
+        self.profileTarget = profileTarget
+        targetIsCurrent = { profileTarget.isCurrent }
     }
 
     /// Guard — runtime-контекст, а не часть значения сохранённого текста.

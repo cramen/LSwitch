@@ -3,11 +3,12 @@ import Foundation
 
 /// Отдельный pure App-harness: без NSApplication, CGEvent, окон, tap или отправки событий.
 @main
+@MainActor
 enum RecoveryIsolationMatrixChecks {
     enum Failure: Error { case failed(String) }
     static let nonce = "00000000-0000-0000-0000-000000000123"
 
-    static func main() throws {
+    static func main() async throws {
         try keyboardShapes()
         try boundedCounters()
         try validWireAndDefaults()
@@ -15,7 +16,10 @@ enum RecoveryIsolationMatrixChecks {
         try editorMetadata()
         try ordinaryContinuationMetadata()
         try armRequestHasNoPayload()
-        print("RecoveryIsolationMatrixChecks: 7 groups passed; no UI/events/clipboard")
+        try RecoverySecureInputChecks.run()
+        try RecoveryDiagnosticPairChecks.run()
+        try await RecoverySystemFaultContinuationChecks.run()
+        print("RecoveryIsolationMatrixChecks: 24 groups passed; no UI/events/clipboard")
     }
 
     static func require(_ value: Bool, _ name: String) throws {
