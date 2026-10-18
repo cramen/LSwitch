@@ -77,29 +77,35 @@ enum KeyboardEmitter {
             for event in events { delivery.post(event, targetPID) }
             return isValid()
         }
-        return await sendPaced(events: events, targetPID: targetPID, isValid: isValid,
-                               beforeKeyDown: beforeKeyDown, observer: observer, delivery: delivery)
+        return await sendPaced(events: events, targetPID: targetPID, delivery: delivery,
+                               callbacks: .init(isValid: isValid, beforeKeyDown: beforeKeyDown, observer: observer))
+    }
+
+    @MainActor
+    private struct PacedCallbacks {
+        let isValid: () -> Bool
+        let beforeKeyDown: () -> Bool
+        let observer: (Phase) -> Void
     }
 
     @MainActor
     private static func sendPaced(
-        events: [CGEvent], targetPID: pid_t, isValid: @MainActor () -> Bool,
-        beforeKeyDown: @MainActor () -> Bool, observer: @MainActor (Phase) -> Void, delivery: Delivery
+        events: [CGEvent], targetPID: pid_t, delivery: Delivery, callbacks: PacedCallbacks
     ) async -> Bool {
         var pressed = PressedKeys()
         defer { pressed.release(events: events, targetPID: targetPID, delivery: delivery) }
         for event in events {
-            guard isValid() else { return false }
+            guard callbacks.isValid() else { return false }
             if event.type == .keyDown {
-                guard beforeKeyDown(), isValid() else { return false }
+                guard callbacks.beforeKeyDown(), callbacks.isValid() else { return false }
             }
             delivery.post(event, targetPID)
-            pressed.record(event, observer: observer)
+            pressed.record(event, observer: callbacks.observer)
             // Интервал 15 мс проверен независимым драйвером в RU Obsidian.
             // Главный run loop должен обработать собственный event tap между событиями.
             await delivery.pause()
         }
-        return isValid()
+        return callbacks.isValid()
     }
 
     @MainActor
