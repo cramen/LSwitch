@@ -51,6 +51,9 @@ enum UnicodeEventEmitter {
         }, postTracked: { isValid, hooks in
             guard !consumed, isValid() else { return false }
             consumed = true
+            if let binding = hooks.nativeBinding {
+                return sendNative(events, targetPID: targetPID, isValid: isValid, hooks: hooks, binding: binding)
+            }
             guard let down = hooks.beforeSend(.text) else { return false }
             delivery(events.down, targetPID)
             hooks.didReturn(.init(submission: down, transport: .unicode, status: nil))
@@ -62,6 +65,26 @@ enum UnicodeEventEmitter {
             }
             return true
         })
+    }
+
+    private static func sendNative(
+        _ events: Events, targetPID: pid_t, isValid: () -> Bool,
+        hooks original: ConversionDispatchHooks, binding: NativeDispatchBinding
+    ) -> Bool {
+        guard isValid(), let batch = binding.prepare(events: [events.down, events.release]),
+              batch.scope.target.processID == targetPID, batch.packets.count == 2 else { return false }
+        var hooks = original
+        var downToken: ConversionSafetySubmissionToken?
+        hooks.beforeSend = { kind in
+            let token = original.beforeSend(kind)
+            if kind == .text { downToken = token }
+            return token
+        }
+        guard binding.send(batch.packets[0], kind: .text, hooks: hooks, transport: .unicode) else { return false }
+        if !binding.send(batch.packets[1], kind: .balancingRelease, hooks: hooks, transport: .unicode),
+           let downToken { original.didLeaveDebt(downToken) }
+        // Как и прежний контракт: true означает отправку Down, а не completion или отсутствие debt.
+        return true
     }
 
     static func events(for text: String) -> Events? {

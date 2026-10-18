@@ -16,6 +16,7 @@ struct ConversionDispatchHooks {
     var didReturn: (ConversionDispatchReply) -> Void
     var submissionCount: () -> Int = { 0 }
     var didLeaveDebt: (ConversionSafetySubmissionToken) -> Void = { _ in }
+    var nativeBinding: NativeDispatchBinding?
 }
 
 /// Узкая команда выделения не предоставляет клиенту Copy/Paste.

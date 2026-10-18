@@ -55,22 +55,37 @@ enum KeyboardEmitter {
     ) async -> Bool {
         observer(.started)
         defer { observer(.returned) }
-        guard targetPID > 0, isValid(), let events = events(for: command) else { return false }
+        guard targetPID > 0, isValid() else { return false }
+        if let hooks, let binding = hooks.nativeBinding {
+            return await sendNative(configuration: .init(
+                command: command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
+                observer: observer, hooks: hooks, delivery: delivery
+            ), binding: binding)
+        }
+        guard let events = events(for: command) else { return false }
         #if DEBUG
         CommandUnicodeDiagnostics.record(command: command, events: events)
         #endif
         logger.info("transport=pid targetPID=\(targetPID, privacy: .public)")
-        let paced = command == .copy || command == .paste
         if let hooks {
             return await sendTracked(events: events, configuration: .init(
                 command: command, targetPID: targetPID, isValid: isValid, beforeKeyDown: beforeKeyDown,
                 observer: observer, hooks: hooks, delivery: delivery
             ))
         }
-        if !paced {
+        if command != .copy && command != .paste {
             for event in events { delivery.post(event, targetPID) }
             return isValid()
         }
+        return await sendPaced(events: events, targetPID: targetPID, isValid: isValid,
+                               beforeKeyDown: beforeKeyDown, observer: observer, delivery: delivery)
+    }
+
+    @MainActor
+    private static func sendPaced(
+        events: [CGEvent], targetPID: pid_t, isValid: @MainActor () -> Bool,
+        beforeKeyDown: @MainActor () -> Bool, observer: @MainActor (Phase) -> Void, delivery: Delivery
+    ) async -> Bool {
         var pressed = PressedKeys()
         defer { pressed.release(events: events, targetPID: targetPID, delivery: delivery) }
         for event in events {

@@ -343,3 +343,21 @@ fallback через обновление CGEventSource исправил roundtri
 Пользователь подтвердил наличие только трекпада. Физическая средняя кнопка и
 right/otherMouseDragged этим не проверены; CGEvent mouse emitter не запускался.
 Задачи 2.2/2.3/4.2 остаются открытыми; подготовки пакетов недостаточно для рабочего sender.
+
+## Bound native transport
+
+NativeDispatchBinding связывает свежий token журнала, reservation и непосредственный
+post, проверяя исходный process instance и запрет повторного/reentrant send.
+Keyboard/Unicode emitters принимают optional binding через receiver contracts;
+старые клиенты без binding сохраняют прежний transport. Отдельный AX observation
+profile не допускается в native binding. Никакой head/tail факт не становится ACK.
+
+Десять новых проверок используют подменный post: submission-before-post, повтор,
+закрытие gate внутри beforeSend, чужой token, Up до Down, потеря процесса, баланс
+admitted модификатора после focus loss/close, healthy keyboard и одноразовый Unicode.
+Недоставленный Up сохраняет debt; повторная отправка Down или всего batch отсутствует.
+Полный набор: **1142 теста, 0 failures/skips**. Логи:
+`.build/native-binding-{test,release,protocol}.log`.
+Это компонентная интеграция, без системных событий и изменения установленной сборки.
+Живой receiver contract и native профиль подтверждения результата ещё отсутствуют;
+задачи 2.2/2.3 и общий runtime этим срезом не закрываются.

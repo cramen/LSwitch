@@ -37,6 +37,13 @@ public final class ConversionSafetyLedger {
     }
 
     public var submissionCount: Int { entries.count }
+
+    /// Только ещё не использованный token непосредственно перед native post; не разрешение replay.
+    func isFreshSubmission(_ token: ConversionSafetySubmissionToken, kind: ConversionSafetySubmissionKind) -> Bool {
+        guard decision == nil, token.operation == operation, let entry = entries[token] else { return false }
+        return entry.kind == kind && entry.returned == nil && !entry.admitted && !entry.unknown
+            && entry.resolution == nil && !entry.observedUnderProfile
+    }
     public var hasEditorMutation: Bool { entries.values.contains { $0.kind.changesEditor } }
     public var hasUnresolvedSubmissions: Bool { entries.values.contains { $0.resolution == nil } }
     public var hasUnknownSubmissions: Bool { entries.values.contains { $0.unknown && $0.resolution == nil } }

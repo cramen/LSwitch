@@ -106,8 +106,24 @@ bound sender/gate; глобальный pass-through не подменяет е�
 fallback через CGEventSource. Unicode не переписывается; тесты сравнивают исходный
 payload native команд и разрешённого Unicode packet. Подготовленные reservation
 остаются prepared; этот компонент сам не разрешает отправку или renderer completion.
-Одноразовое потребление и непосредственная связь ledger token → registry → post
-остаются обязанностью следующего bound sender, не считаются здесь реализованными.
+`NativeDispatchBinding` теперь связывает тот же ledger с gate и точным process instance.
+Перед post выполняются свежие проверки контекста/identity и ещё не использованного
+token нужного вида, затем registerSubmitted и непосредственно post без await или
+внешнего guard между ними. Повтор и reentrant send отклоняются. Отказ после выдачи
+token сохраняет unknown, не выдумывает preventedBeforeAdmission. AX-профиль не
+принимается этим sender: его допуск не распространяется на native команды.
+
+Optional binding проходит через Clipboard/UnicodeBoundReceiverContract и hooks;
+MutationSafety проверяет принадлежность тому же экземпляру ledger. KeyboardEmitter
+и UnicodeEventEmitter используют bound transport при наличии binding. Keyboard
+готовит весь batch до отправки и при остановке балансирует только ещё не попытанные
+Up; неудачный Up не повторяется. Потеря исходного процесса сохраняет debt. Unicode
+сохраняет прежнюю одноразовость и packet policy, а true по-прежнему означает только
+отправленный Down. Строгие модельные contracts продолжают требовать completion.
+
+Системный поставщик receiver contract и принятый native observation profile ещё
+отсутствуют: runtime по-прежнему не включён. Callback-тесты этого подключения
+используют подменный post и не заменяют живую приёмку editor completion/clipboard.
 
 Следующая предпосылка — точная форма собственных flagsChanged для Cmd/Shift/Control/Option
 (левая и правая клавиши). Decoder читает только type/keyCode/flags, определяет Down/Up

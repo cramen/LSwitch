@@ -18,6 +18,7 @@ final class ClipboardMutationSafety {
         guard let ledger = request.safetyLedger else { return true }
         guard let bound = contract?.bind(context.identity, ledger.operation),
               bound.contextIdentity == context.identity, bound.operation == ledger.operation,
+              bound.nativeBinding?.belongs(to: ledger) != false,
               bound.isCurrent(), bound.canBalance(), !Task.isCancelled, ledger.permitsOrdinarySubmission,
               !ledger.hasUnresolvedSubmissions else { return false }
         binding = bound
@@ -37,7 +38,7 @@ final class ClipboardMutationSafety {
         didLeaveDebt: {
             self.debt.insert($0)
             self.request.safetyLedger?.recordOutstandingKeyDebt(for: $0)
-        })
+        }, nativeBinding: binding?.nativeBinding)
     }
 
     private func beforeSend(

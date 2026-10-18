@@ -17,6 +17,7 @@ struct ClipboardBoundReceiverContract {
     /// Балансировать разрешено только уже отправленный Down исходному экземпляру процесса.
     var canBalance: () -> Bool
     var completion: (ClipboardDispatchReply, ClipboardReceiverObservation) -> ClipboardReceiverEvidence
+    var nativeBinding: NativeDispatchBinding?
 
     func evidence(
         for reply: ClipboardDispatchReply, observation: ClipboardReceiverObservation

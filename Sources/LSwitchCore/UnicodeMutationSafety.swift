@@ -18,6 +18,7 @@ final class UnicodeMutationSafety {
         guard let ledger = request.safetyLedger else { return true }
         guard let bound = contract?.bind(target, ledger.operation), bound.target == target,
               bound.operation == ledger.operation, bound.isCurrent(), bound.canBalance(), !Task.isCancelled,
+              bound.nativeBinding?.belongs(to: ledger) != false,
               ledger.permitsOrdinarySubmission, !ledger.hasUnresolvedSubmissions else { return false }
         binding = bound
         return true
@@ -29,7 +30,7 @@ final class UnicodeMutationSafety {
                      submissionCount: { self.request.safetyLedger?.submissionCount ?? 0 }, didLeaveDebt: {
             self.debt.insert($0)
             self.request.safetyLedger?.recordOutstandingKeyDebt(for: $0)
-        })
+        }, nativeBinding: binding?.nativeBinding)
     }
 
     private func beforeSend(

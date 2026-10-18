@@ -22,6 +22,7 @@ struct UnicodeBoundReceiverContract {
     /// Только реальный Up debt исходному экземпляру процесса; не разрешение нового Down.
     var canBalance: () -> Bool
     var completion: (ConversionDispatchReply, UnicodeReceiverObservation) -> UnicodeReceiverEvidence
+    var nativeBinding: NativeDispatchBinding?
 
     func evidence(for reply: ConversionDispatchReply, observation: UnicodeReceiverObservation)
         -> UnicodeReceiverEvidence {
