@@ -10,4 +10,4 @@
 
 ## 3. Приёмка
 
-- [ ] 3.1 Выполнить make test, build/Release, strict CI и OpenSpec validate; записать результаты и ограничения в документацию.
+- [x] 3.1 Выполнить make test, build/Release, strict CI и OpenSpec validate; записать результаты и ограничения в документацию.
