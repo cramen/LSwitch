@@ -75,6 +75,26 @@ receiver contracts. В live-конфигурации сейчас нет сис�
 
 ## Как принимать результат редактора
 
+### Первый шаг: глобальная классификация собственных заголовков
+
+Перед logical/legacy capture глобальный EventTap проверяет source Unix PID своего
+процесса и реально зарезервированный serial общего NativeDispatchMarkers namespace.
+Совпавшее событие пропускается без RawKeyEvent/Unicode чтения и без изменения activity.
+Это только исключение собственной команды из логического ввода; фактическую доставку
+по-прежнему решает per-PID gate. Проверка не означает admission/completion или
+аутентификацию внешнего источника. Чужой PID, другой namespace, serial 0 и ещё не
+зарезервированный serial сохраняют прежний путь. Allocator хранит monotonic high-water,
+поэтому поздний собственный marker остаётся распознаваемым после закрытия registry
+без сохранения payload или неограниченного списка прошлых Session. Другие allocator
+namespaces не признаются production shared namespace автоматически.
+DEBUG fixture-prefix получает отдельный namespace: он моделирует пользовательский
+ввод и должен по-прежнему проходить capture. Смешение fixture и собственных команд
+выявлено существующими callback-тестами; исключение не обходится изменением их ожиданий.
+
+Этот шаг сам не подключает clipboard/Unicode sender и не разрешает их runtime.
+Per-PID обработка старых own packets и их release debt остаётся отдельной обязанностью
+bound sender/gate; глобальный pass-through не подменяет её.
+
 Нынешние clipboard/Unicode evidence enums различают только `receiverCompleted`,
 `preventedBeforeAdmission` и `unresolved`. Заполнение этих contracts событием
 admission из gate дало бы ложное подтверждение. Перед healthy ordinary delivery

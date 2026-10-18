@@ -41,8 +41,8 @@ public final class EventTapCore {
     @MainActor var deliveryGate = EventDeliveryGate()
 
     /// - Parameter handler: вызывается на выделенной последовательной очереди
-    ///   для каждого перехваченного события (включая синтетику — фильтрация
-    ///   на стороне подписчика через `RawKeyEvent.isSynthetic`).
+    ///   для входящих raw событий. Старую synthetic метку фильтрует подписчик;
+    ///   собственные reserved native команды исключаются до чтения payload.
     public convenience init(handler: @escaping Handler) {
         self.init(handler: handler, processingQueue: DispatchQueue(label: "lswitch.eventtap.processing"))
     }
@@ -222,6 +222,8 @@ extension EventTapCore {
             return Unmanaged.passUnretained(event)
         }
 
+        // Перед любым logical/legacy payload read. Настоящий recipient gate решает доставку отдельно.
+        if NativeDispatchHeader.isOwnReservedEvent(event) { return Unmanaged.passUnretained(event) }
         if processingLeases.observe(type: type, event: event) {
             return Unmanaged.passUnretained(event)
         }

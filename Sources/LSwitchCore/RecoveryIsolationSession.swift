@@ -6,6 +6,7 @@ import Foundation
 /// Один app-owned ledger и настоящий capture→handover. Нет populate и production receiver/replay permit.
 @MainActor
 public final class RecoveryIsolationSession {
+    private static let fixtureMarkers = NativeDispatchMarkers()
     public let bridge: RecoveryRecipientProbeBridge
     let ledger: ConversionSafetyLedger
     let coordinator: RecoveryCoordinator
@@ -57,7 +58,7 @@ public final class RecoveryIsolationSession {
     }
 
     public static func allocateFixtureMarkers() -> RecoveryIsolationFixtureMarkers? {
-        guard let values = NativeDispatchMarkers.shared?.reserve(4), values.count == 4 else { return nil }
+        guard let values = fixtureMarkers?.reserve(4), values.count == 4 else { return nil }
         return .init(prefixDown: values[0], prefixRelease: values[1],
                      challengeDown: values[2], challengeRelease: values[3])
     }
