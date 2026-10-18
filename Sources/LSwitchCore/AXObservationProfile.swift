@@ -145,15 +145,22 @@ final class AXObservationProfile {
     }
 
     func read(expected: AXProfileExpectedState?, ledger: ConversionSafetyLedger) -> AXProfileSnapshot? {
-        guard isCurrent(ledger: ledger) else { return nil }
         var denied = false
-        let snapshot = diagnostics.measure(.snapshot) {
-            environment.snapshot(element) {
-                guard !denied, self.isCurrent(ledger: ledger) else { denied = true; return false }
-                return true
-            }
+        func allowed() -> Bool {
+            guard !denied, isCurrent(ledger: ledger) else { denied = true; return false }
+            return true
         }
-        guard !denied, isCurrent(ledger: ledger) else { return nil }
+        let snapshot: AXProfileSnapshot?
+        if let bounded = environment.boundedSnapshot {
+            snapshot = diagnostics.measure(.snapshot) { bounded.read(element, canRead: allowed) }
+        } else {
+            guard allowed() else { return nil }
+            snapshot = diagnostics.measure(.snapshot) {
+                environment.snapshot(element, allowed)
+            }
+            guard allowed() else { return nil }
+        }
+        guard !denied else { return nil }
         guard let snapshot else { _ = fault(.snapshotUnavailable, ledger: ledger); return nil }
         let matches = expected.map {
             snapshot.text.utf16.elementsEqual($0.text.utf16) && $0.selections.contains(snapshot.selection)

@@ -470,6 +470,15 @@ submission, а source/foreground — с обеих сторон. Request/lease c
 последним. При смене фокуса/защиты во время metadata чтения закрывающая проверка
 отказывает до payload. Generic/custom boundary сохраняет прежний порядок.
 
+После физического v10 остаётся малый запас до deadline. Для системного snapshot
+вводится конкретный bounded access: он всегда вызывает guard до первого getter и
+после каждого getter, без callback до первого guard или после последнего. Поэтому
+Profile не повторяет внешний pre/post guard вокруг этого конкретного reader.
+Произвольный environment.snapshot и fault injection сохраняют прежние внешние guards.
+Проверки между count/text/count/selection, два стабильных чтения, exact UTF-16,
+границы 65536 units и 400 мс не меняются. Bounded access не содержит cached permission
+или cached snapshot; отказ любого getter/guard необратимо отказывает операции.
+
 #### D2.7. Точный undo с типизированной целью предыдущего receipt
 
 Подтверждённый canonical AX receipt может содержать внутренний AXProfileReceiptTarget:

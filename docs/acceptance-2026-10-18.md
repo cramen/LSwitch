@@ -298,3 +298,31 @@ converted, RAM recovery не возникла. Это подтверждает �
 runner подтвердил `launcherExit 0` и восстановил обычный LSwitch; enabled ON, auto OFF,
 sound ON. Пользовательское выделение текста после опыта не выдаётся за final caret
 самой операции.
+
+## Предпосылка native sender и bounded AX reader
+
+Собственные reserved native headers исключаются из глобального logical input до
+payload чтения, только при своём source PID и реально выделенном shared serial.
+Fixture-prefix выделен в отдельный namespace, чтобы продолжать моделировать
+пользовательский ввод. Callback-регрессии проверяют pre-arm, active lease, foreign
+PID/namespace и закрытое поколение; recognition не объявляется admission.
+Срез 1119 тестов/Release/27 protocol-групп прошёл локально. CI `3b39981` нашёл только
+complexity=11 в callback; эквивалентные early-return условия объединены с сохранением
+short-circuit порядка. Clipboard/Unicode sender этим ещё не подключены.
+
+Конкретный AXBoundedSnapshotAccess гарантирует guard перед первым getter и после
+каждого getter. Только для него убраны два внешних дубля Profile; arbitrary provider
+и fault injection сохраняют прежние guards. Четыре новые регрессии проверяют точные
+границы, смену документа внутри count, защиту после selection и oversized отказ без
+payload/fallback. Полный набор — **1123 теста, 0 failures/skips**. Заодно fixture
+старого synthetic-marker теста перестал наследовать реальные удерживаемые модификаторы:
+ожидание обычной буквы теперь явно задаёт flags=[]; production classifier не менялся.
+
+V11 SHA `893f2d5e6f7dcdb9828a9edc1b42fca7fc7713fb89cef9c7be7cfbe2d8eee479`, PID 66612,
+manifest `.build/recovery-bounded-v11-manifest.json`. Четыре живые операции
+converted/undone/converted/undone прошли с TIS RU↔EN, profileFault=none и logicalFailure=none.
+Во всех операциях 9 полных snapshots, 63 context boundaries вместо 81. Полный operation
+time — 343/317/395/409 мс; это ещё не latency acceptance или доказанный устойчивый запас.
+После Undo AX-текст собственного документа содержит точный `цщкдв` с U+00A0, не ASCII space.
+Логи `.build/recovery-bounded-v11-{system,driver}.log`. Candidate завершён штатно,
+ordinary восстановлен. Физический ввод относится к V10, не объявляется повторённым на V11.

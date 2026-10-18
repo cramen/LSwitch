@@ -70,4 +70,5 @@ struct AXProfileEnvironment {
     let snapshot: (AXUIElement, () -> Bool) -> AXProfileSnapshot?
     /// Отсутствие этого provider запрещает combined boundary; старый request guard сохраняется отдельно.
     var foregroundProcessID: () -> Int32? = { nil }
+    var boundedSnapshot: AXBoundedSnapshotAccess?
 }

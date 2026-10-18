@@ -9,16 +9,17 @@ extension AXProfileEnvironment {
     static func textEditCandidate() -> Self {
         let access = SystemAXTextAccess()
         let context = AXTextEditContextReader(access: AXTextEditProfileEnvironment.contextAccess)
+        let bounded = AXBoundedSnapshotAccess(count: {
+            AXTextEditProfileEnvironment.attribute(kAXNumberOfCharactersAttribute, $0) as? Int
+        }, text: { AXTextEditProfileEnvironment.string(in: $0, range: $1) },
+        selection: { access.selection(in: $0) })
         return .init(activeSource: { UnicodeInputSource.current() },
                      focusedElement: { access.focusedElement() },
                      isProtected: { AXTextEditProfileEnvironment.isProtected($0) },
                      context: { context.context($0) }, snapshot: { element, canRead in
-            AXProfileSnapshotReader(readCount: {
-                AXTextEditProfileEnvironment.attribute(kAXNumberOfCharactersAttribute, element) as? Int
-            }, readText: { range in
-                AXTextEditProfileEnvironment.string(in: element, range: range)
-            }, readSelection: { access.selection(in: element) }).read(canRead: canRead)
-        }, foregroundProcessID: { NSWorkspace.shared.frontmostApplication?.processIdentifier })
+            bounded.read(element, canRead: canRead)
+        }, foregroundProcessID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+                     boundedSnapshot: bounded)
     }
 }
 

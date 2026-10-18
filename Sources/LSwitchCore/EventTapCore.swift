@@ -223,8 +223,7 @@ extension EventTapCore {
         }
 
         // Перед любым logical/legacy payload read. Настоящий recipient gate решает доставку отдельно.
-        if NativeDispatchHeader.isOwnReservedEvent(event) { return Unmanaged.passUnretained(event) }
-        if processingLeases.observe(type: type, event: event) {
+        if NativeDispatchHeader.isOwnReservedEvent(event) || processingLeases.observe(type: type, event: event) {
             return Unmanaged.passUnretained(event)
         }
         switch recoveryCaptureRouter.route(type: type, event: event) {

@@ -55,7 +55,11 @@ final class SyntheticEventMarkerTests: XCTestCase {
         // Только объекты в памяти: ни один keyDown этого теста не отправляется в систему.
         let own = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 5, keyDown: true))
         let foreign = try XCTUnwrap(CGEvent(keyboardEventSource: nil, virtualKey: 5, keyDown: true))
-        for event in [own, foreign] { event.keyboardSetUnicodeString(stringLength: 1, unicodeString: [0x67]) }
+        for event in [own, foreign] {
+            // Fixture символа не наследует реально удерживаемые пользователем Cmd/Ctrl/Option.
+            event.flags = []
+            event.keyboardSetUnicodeString(stringLength: 1, unicodeString: [0x67])
+        }
         XCTAssertTrue(SyntheticEventMarker.tag(own))
         let core = EventTapCore { _ in }
         let ownRaw = try XCTUnwrap(core.correctedRawEvent(type: .keyDown, event: own))

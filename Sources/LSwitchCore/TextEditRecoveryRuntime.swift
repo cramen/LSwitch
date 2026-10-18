@@ -182,7 +182,8 @@ public final class TextEditRecoveryRuntime {
             }, snapshot: { element, canRead in
                 if let fault { return fault.snapshot(element, canRead: canRead, original: system.snapshot) }
                 return system.snapshot(element, canRead)
-            }, foregroundProcessID: system.foregroundProcessID
+            }, foregroundProcessID: system.foregroundProcessID,
+            boundedSnapshot: fault == nil ? system.boundedSnapshot : nil
         )
         guard let profile = AXObservationProfile.prepareTextEdit(element: target.element, environment: guarded),
               profile.binding.target.processID == target.capturedApplicationPID else { return nil }
