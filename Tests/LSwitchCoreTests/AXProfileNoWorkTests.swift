@@ -140,7 +140,7 @@ final class AXProfileNoWorkTests: XCTestCase {
         let fixture = TrackedConverterFixture()
         fixture.profile = profile.binding
         fixture.mechanisms = [.accessibility]
-        fixture.accessibility.handler = { await engine.perform($0) }
+        fixture.boundAXEngine = engine
         editor.duringRead = { _ in
             if editor.snapshotReads == 2 { editor.missingSnapshot = true }
         }
@@ -164,7 +164,7 @@ final class AXProfileNoWorkTests: XCTestCase {
         let fixture = TrackedConverterFixture()
         fixture.profile = profile.binding
         fixture.mechanisms = [.accessibility]
-        fixture.accessibility.handler = { await engine.perform($0) }
+        fixture.boundAXEngine = engine
         let result = await fixture.converter.trigger()
         XCTAssertEqual(result, .failed, "No-work не публикует успешную замену")
         XCTAssertFalse(fixture.converter.hasPendingRecovery)

@@ -15,6 +15,8 @@ final class RecoveryWindowView: NSView {
     private let actions: Actions
     private var payloadEditors: [RecoveryPlainTextEditor] = []
     private var draftEditor: RecoveryPlainTextEditor?
+    private var metadataContainer: NSStackView?
+    private var metadataRecordIdentifier: UUID?
 
     init(snapshot: RecoveryWindowSnapshot, draft: RecoveryWindowDraft?, actions: Actions) {
         self.actions = actions
@@ -30,7 +32,12 @@ final class RecoveryWindowView: NSView {
         ])
         stack.addArrangedSubview(label("Сохранённый ввод", emphasis: true))
         if let metadata = snapshot.metadata {
-            addMetadata(metadata, to: stack)
+            let section = verticalStack()
+            metadataContainer = section
+            metadataRecordIdentifier = metadata.recordIdentifier
+            stack.addArrangedSubview(section)
+            section.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+            _ = updateMetadata(metadata)
             if let notice = snapshot.notice { stack.addArrangedSubview(label(noticeText(notice))) }
             if snapshot.isVisible, !snapshot.isDeleted {
                 addDisclosure(snapshot.projection, draft: draft, to: stack)
@@ -58,6 +65,19 @@ final class RecoveryWindowView: NSView {
     func flushEdits() { payloadEditors.forEach { $0.flushEdits() } }
 
     func focusDraft() { draftEditor?.focusForEditing() }
+
+    /// Удаляются только labels metadata: payload subtree, NSTextView и first responder не затрагиваются.
+    @discardableResult
+    func updateMetadata(_ metadata: RecoveryWindowMetadata) -> Bool {
+        guard metadata.recordIdentifier == metadataRecordIdentifier, let metadataContainer else { return false }
+        for view in metadataContainer.arrangedSubviews {
+            metadataContainer.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        addMetadata(metadata, to: metadataContainer)
+        fitLabels(in: metadataContainer)
+        return true
+    }
 
     func erasePayload() {
         payloadEditors.forEach { $0.erasePresentation() }

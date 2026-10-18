@@ -35,6 +35,13 @@ final class EventProcessingLeaseController: @unchecked Sendable {
     @MainActor
     func preCaptureReady(_ lease: EventProcessingLease) -> Bool { state.preCaptureReady(lease, at: clock()) }
 
+    #if DEBUG
+    @MainActor
+    func prepareRecipientArm(_ lease: EventProcessingLease) -> PreparedEventProcessingArm? {
+        PreparedEventProcessingArm(state: state, lease: lease, clock: clock)
+    }
+    #endif
+
     @MainActor
     func arm(_ lease: EventProcessingLease, activate: () -> Bool) -> Bool {
         guard preCaptureReady(lease) else { return false }
@@ -65,7 +72,9 @@ final class EventProcessingLeaseController: @unchecked Sendable {
             switch state.next(lease, at: clock()) {
             case .event(let raw): actions.consume(raw)
             case .finished(let result):
+                if result == .stale { return .stale }
                 if result != .delivered { actions.reset() }
+                actions.didFinish()
                 return result
             }
         }

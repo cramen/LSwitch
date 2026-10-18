@@ -79,10 +79,14 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
 
     /// Внешний app-owner уже зарегистрировал Session. Возврат true предшествует первой мутации редактора.
     @MainActor
-    func armRecipientCapture(_ capture: RecipientOrdinaryCapture) async -> Bool {
+    func armRecipientCapture(
+        _ capture: RecipientOrdinaryCapture, processingArm: PreparedEventProcessingArm? = nil
+    ) async -> Bool {
         guard !Task.isCancelled, capture.scope.binding.scope == bridge.capturedScope,
+              processingArm?.matches(capture) != false,
               worker.refreshHealth(), let activation = bridge.prepareActivation() else { return false }
-        let request = RecipientCaptureArming(state: state, capture: capture, activation: activation)
+        let request = RecipientCaptureArming(state: state, capture: capture, activation: activation,
+                                            processingArm: processingArm)
         let result = await withTaskCancellationHandler(operation: {
             await withCheckedContinuation { continuation in
                 request.register(continuation)
@@ -93,7 +97,7 @@ public final class RecipientTapDriver: RecoveryIsolationProtecting, @unchecked S
             }
         }, onCancel: { request.cancel() })
         guard !Task.isCancelled else { request.cancel(); return false }
-        return result && state.permitsMutation
+        return result && state.permitsMutation && (processingArm?.isCurrent ?? true)
     }
 
     /// Подготовка не claim-ит очередь и не отправляет marker. Diagnostic значение выделяется самим fixture заранее.

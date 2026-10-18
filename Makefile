@@ -2,12 +2,16 @@
 # поэтому используем toolchain полного Xcode напрямую.
 export DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
 
-.PHONY: build test run lint app run-app run-app-refuse-ru run-app-refuse-en check-recovery-protocol matrix-app
+.PHONY: build build-release test run lint app run-app run-app-refuse-ru run-app-refuse-en \
+	check-recovery-protocol matrix-app
 
 APP_DIR := .build/LSwitch.app
 
 build:
 	swift build
+
+build-release:
+	swift build -c release
 
 test:
 	swift test

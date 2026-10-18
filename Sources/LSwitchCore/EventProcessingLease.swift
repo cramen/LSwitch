@@ -35,6 +35,7 @@ struct EventProcessingActions {
     let applyOutcome: @MainActor @Sendable () -> Void
     let reset: @MainActor @Sendable () -> Void
     let consume: @MainActor @Sendable (RawKeyEvent) -> Void
+    var didFinish: @MainActor @Sendable () -> Void = {}
 }
 
 struct EventProcessingMetadata: Equatable, Sendable {

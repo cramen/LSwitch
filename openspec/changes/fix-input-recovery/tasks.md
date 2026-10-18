@@ -32,8 +32,14 @@ Production factory/transport не подключены; эти проверки 
 protocol harness — 6 групп. Добавлены async transport completion, processing lease
 и ordinary custody с передачей прежнего claim после частичного отказа; review CLEAN.
 Живой v6 подтвердил native Cmd+A control и его блокировку в protected/closed/logical-lost.
-Mouse, настоящий flush и рабочий lifecycle не приняты; число завершённых задач — 4/14.
+В этом срезе mouse, настоящий flush и рабочий lifecycle ещё не были приняты.
 Подробности, failed controls и SHA: `docs/acceptance-2026-10-17.md`.
+
+Последующий срез `32e3e38`: 994 теста, 7 protocol-групп и полный CI зелёные.
+Живые v7/v8 подтвердили mouse control/blocking и настоящий focus round-trip.
+Ordinary v1 подтвердил один proxy flush, точный следующий ввод, сохранение полного
+оригинала при отказе и reveal/quit-cancel в RAM UI. Pilot TextEdit ещё подключается;
+полная 4.2 и рабочий lifecycle остаются открыты, поэтому прогресс по задачам — 4/14.
 
 - [ ] 2.1 Перевести прямой AX-конвертер на журнал мутации и структурированный cleanup, не ослабляя проверки текста, диапазона, identity и разрешений. Проверка: тесты setter success/error, позднего изменения и постоянно недоступного readback различают отсутствие мутации и неизвестное восстановление; успешный AX и точный undo сохраняются.
 - [ ] 2.2 Перевести clipboard-конвертер с AX и native selection на тот же контракт, сохранив независимое владение clipboard. Проверка: обе production-регрессии `select → missing state → Paste=0` сохраняют удержанные события в recovery вместо опасного replay; оригинальный clipboard восстановлен только при своём changeCount, более новое копирование не затирается.

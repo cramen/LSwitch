@@ -83,6 +83,7 @@ final class ConverterTrackedTests: XCTestCase {
     func testProfileIsAXOnlyEvenWhenPreferencesWouldChooseClipboardOrUnicode() async throws {
         let fixture = TrackedConverterFixture()
         fixture.profile = try ConversionSafetyProfileFixture().binding
+        fixture.boundAXEngine = fixture.accessibility
         fixture.mechanisms = [.accessibility]
         fixture.clipboardPreferred = true
         fixture.unicodePreferred = true

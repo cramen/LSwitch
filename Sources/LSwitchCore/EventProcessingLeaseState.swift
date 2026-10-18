@@ -91,8 +91,7 @@ final class EventProcessingLeaseState: @unchecked Sendable {
         defer { lock.unlock() }
         guard let current, current.lease == lease else { return false }
         expire(current, at: now)
-        return !current.armed && !current.finishing && current.failure == nil
-            && activity == current.initialActivity && activity < UInt64.max
+        return mayArm(current)
     }
 
     /// После synchronous native activation проверяется тот же counter: reentry не превращается в допуск.
@@ -101,11 +100,37 @@ final class EventProcessingLeaseState: @unchecked Sendable {
         defer { lock.unlock() }
         guard let current, current.lease == lease else { return false }
         expire(current, at: now)
-        guard !current.armed, !current.finishing, current.failure == nil,
-              activity == current.initialActivity, activity < UInt64.max else { return false }
+        guard mayArm(current) else { return false }
         current.armed = true
         return true
     }
+
+    #if DEBUG
+    func preparationDeadline(_ lease: EventProcessingLease, at now: UInt64) -> UInt64? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current, current.lease == lease else { return nil }
+        expire(current, at: now)
+        return mayArm(current) ? current.deadline : nil
+    }
+
+    /// Lock закрывает interval между logical arm и native publish для глобального callback.
+    func armPublishing(
+        _ lease: EventProcessingLease, at now: UInt64, publication: RecipientCapturePublication
+    ) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let current, current.lease == lease, publication.capture.scope.binding.scope == lease.scope,
+              publication.capture.attachment.port.holdDeadline <= current.deadline else {
+            return false
+        }
+        expire(current, at: now)
+        guard mayArm(current) else { return false }
+        guard publication.publish() else { invalidate(current, reason: .captureRefused); return false }
+        current.armed = true
+        return true
+    }
+    #endif
 
     func isCurrent(_ lease: EventProcessingLease, at now: UInt64) -> Bool {
         lock.lock()
@@ -170,6 +195,11 @@ final class EventProcessingLeaseState: @unchecked Sendable {
 
     private func expire(_ record: Record, at now: UInt64) {
         if now >= record.deadline { invalidate(record, reason: .expired) }
+    }
+
+    private func mayArm(_ record: Record) -> Bool {
+        !record.armed && !record.finishing && record.failure == nil
+            && activity == record.initialActivity && activity < UInt64.max
     }
 
     private func invalidate(_ record: Record, reason: EventProcessingInvalidation) {

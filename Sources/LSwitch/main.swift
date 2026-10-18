@@ -2,7 +2,6 @@ import AppKit
 import Combine
 import LSwitchCore
 import os
-import SwiftUI
 
 /// Точка входа menu-bar агента LSwitch.
 ///
@@ -17,11 +16,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private lazy var statusMenu = StatusMenuController()
     private let permissionNotice = PermissionNoticeController()
-    private var settingsWindow: NSWindow?
+    var settingsWindow: NSWindow?
 
-    private let settings = SettingsStore()
-    private let appRules = AppRules()
-    private let personalDictionary = PersonalDictionary()
+    let settings = SettingsStore()
+    let appRules = AppRules()
+    let personalDictionary = PersonalDictionary()
     private let layoutManager = LayoutManager()
     private let undoStore = UndoStore()
     private let permGuard = PermGuard()
@@ -35,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var detector = DoubleShiftDetector()
     private var eventTap: EventTapCore?
     private var inputHoldingTap: EventTapCore?
+    private let conversions = AppConversionDispatch()
     private lazy var converter = makeConverter()
     private var inputGeneration: UInt64 = 0
     private var interceptionGeneration: UInt64 = 0
@@ -57,6 +57,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             logger.error("Не удалось начать диагностику: \(error.localizedDescription, privacy: .public)")
         }
         #endif
+        guard conversions.configure(eventTap: { [weak self] in self?.eventTap }, currentSafety: { [weak self] in
+            guard let self else { return false }
+            return self.settings.enabled && self.permGuard.current.allGranted && self.eventTap != nil
+        }, onAvailability: { [weak self] in self?.statusMenu.setRecoveryAvailable($0) }) else {
+            logger.error("Pilot требует абсолютный путь отдельного тестового документа")
+            NSApplication.shared.terminate(nil)
+            return
+        }
         setupStatusItem()
         setupPermGuard()
         observeWorkspace()
@@ -77,10 +85,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings.$enabled.dropFirst().receive(on: DispatchQueue.main).sink { [weak self] enabled in
             guard let self else { return }
             self.permGuard.checkNow()
-            if enabled { self.startInterception() } else { self.stopInterception() }
+            if enabled { self.startInterception() } else {
+                self.conversions.disabled()
+                self.stopInterception()
+            }
             self.refreshMenuStatus()
         }.store(in: &cancellables)
         logger.info("TIS источники: \(self.layoutManager.enabledSourceIDs())")
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        conversions.requestQuit { sender.reply(toApplicationShouldTerminate: $0) } ? .terminateLater : .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -110,7 +125,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.handleIntercepted(raw)
             }
         }
-        tap.onRecoveryStarted = { [weak self] _ in self?.resetInputContext() }
+        tap.onRecoveryStarted = { [weak self] _ in
+            self?.conversions.tapLost()
+            self?.resetInputContext()
+        }
         #if DEBUG
         diagnosticsSession?.attach(tap)
         #endif
@@ -150,22 +168,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let generation = inputGeneration
             Task { [converter, autoSwitch] in
                 guard self.settings.enabled, self.inputGeneration == generation, target.isCurrent() else { return }
-                let outcome = await converter.trigger(
-                    expectedWord: word.isEmpty ? nil : word, triggerTimestamp: raw.timestamp
-                )
-                switch outcome {
-                case .undone, .partiallyUndone:
-                    // Откат автоконвертации — сигнал обучения (design D4).
-                    autoSwitch.registerUndo()
-                    self.keystrokeBuffer.clear()
-                case .converted, .partiallyConverted:
-                    autoSwitch.clearPendingUndoCandidate()
-                    self.keystrokeBuffer.clear()
-                default:
-                    break
-                }
-                self.statusMenu.showOutcome(outcome)
-                self.logger.info("Хоткей: \(outcome.label, privacy: .public)")
+                await self.conversions.perform(operation: {
+                    await converter.trigger(expectedWord: word.isEmpty ? nil : word, triggerTimestamp: raw.timestamp)
+                }, applyOutcome: { outcome in
+                    switch outcome {
+                    case .undone, .partiallyUndone:
+                        autoSwitch.registerUndo()
+                        self.keystrokeBuffer.clear()
+                    case .converted, .partiallyConverted:
+                        autoSwitch.clearPendingUndoCandidate()
+                        self.keystrokeBuffer.clear()
+                    default: break
+                    }
+                    self.statusMenu.showOutcome(outcome)
+                    self.logger.info("Хоткей: \(outcome.label, privacy: .public)")
+                }, reset: { self.resetInputContext() }, consume: { self.handleIntercepted($0) })
             }
             return
         }
@@ -220,18 +237,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 return
             }
-            let outcome = await converter.trigger(
-                expectedWord: context.word, trailingText: context.trailingText, allowUndo: false,
-                triggerTimestamp: triggerTimestamp
-            )
-            switch outcome {
-            case .converted, .partiallyConverted:
-                self.keystrokeBuffer.clear()
-            default:
-                autoSwitch.clearPendingUndoCandidate()
-            }
-            self.statusMenu.showOutcome(outcome)
-            self.logger.info("Автоконвертация: \(outcome.label, privacy: .public)")
+            await self.conversions.perform(operation: {
+                await converter.trigger(expectedWord: context.word, trailingText: context.trailingText,
+                                        allowUndo: false, triggerTimestamp: triggerTimestamp)
+            }, applyOutcome: { outcome in
+                switch outcome {
+                case .converted, .partiallyConverted: self.keystrokeBuffer.clear()
+                default: autoSwitch.clearPendingUndoCandidate()
+                }
+                self.statusMenu.showOutcome(outcome)
+                self.logger.info("Автоконвертация: \(outcome.label, privacy: .public)")
+            }, reset: { self.resetInputContext() }, consume: { self.handleIntercepted($0) })
         }
     }
 
@@ -243,52 +259,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         autoSwitch.clearPendingUndoCandidate()
     }
 
-    private func makeConverter() -> Converter {
-        Converter(
-            currentLayout: { [layoutManager] in layoutManager.currentLayout() },
-            switchLayout: { [layoutManager] layout in
-                #if DEBUG
-                let direction = layout == .russian ? "ru" : "en"
-                if CommandLine.arguments.contains("--test-refuse-layout=\(direction)") { return false }
-                #endif
-                return layoutManager.switchTo(layout)
-            },
-            appRules: appRules,
-            undoStore: undoStore,
-            frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
-            prefersClipboard: { [appProfiles] in
-                AcceptanceOptions.prefersClipboard(defaultValue: appProfiles.prefersClipboard(bundleID: $0))
-            },
-            makeAXEngine: { AXConversionEngine() },
-            makeClipboardEngine: { AcceptanceOptions.makeClipboardEngine() },
-            makeUnicodeEngine: { AcceptanceOptions.makeUnicodeEngine(bundleID: $0) },
-            beginInputHold: { [weak self] in
-                guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
-                self.inputHoldingTap = tap
-                return true
-            },
-            endInputHold: { [weak self] in
-                self?.inputHoldingTap?.endInputHold()
-                self?.inputHoldingTap = nil
-            },
-            isInputHoldValid: { [weak self] in self?.inputHoldingTap?.isInputHeld == true },
-            drainPendingInput: { [weak self] in await self?.inputHoldingTap?.drainPendingEvents() },
-            onLayoutSwitched: { [weak self] source, target, startedAt in
-                self?.eventTap?.recordLayoutChange(from: source, to: target, since: startedAt)
-            },
-            onConverted: { [weak self] in
-                guard let self, self.settings.soundEnabled else { return }
-                self.soundFeedback.conversionSucceeded()
-            }
-        )
-    }
-
     // MARK: - PermGuard
 
     private func setupPermGuard() {
         permGuard.onPermissionsLost = { [weak self] status in
             guard let self else { return }
             self.logger.notice("Не хватает разрешений — перехват остановлен")
+            self.conversions.permissionsLost()
             self.stopInterception()
             self.permissionNotice.show(status)
         }
@@ -315,7 +292,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.resetInputContext() }
+            MainActor.assumeIsolated {
+                self?.conversions.focusChanged()
+                self?.resetInputContext()
+            }
         }
     }
 
@@ -323,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         statusMenu.onToggle = { [weak self] in self?.settings.enabled.toggle() }
+        statusMenu.onRecovery = { [weak self] in self?.conversions.showRecovery() }
         statusMenu.onSettings = { [weak self] in self?.openSettings() }
         statusMenu.onPermissions = { [weak self] in
             guard let self else { return }
@@ -343,23 +324,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 }
 
 extension AppDelegate {
-    @objc private func openSettings() {
-        if settingsWindow == nil {
-            let view = SettingsView(settings: settings, appRules: appRules, personalDictionary: personalDictionary)
-            let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 320),
-                styleMask: [.titled, .closable],
-                backing: .buffered,
-                defer: false
-            )
-            window.title = "Настройки LSwitch"
-            window.contentView = NSHostingView(rootView: view)
-            window.isReleasedWhenClosed = false
-            settingsWindow = window
-        }
-        // LSUIElement-агент: активируем принудительно, иначе окно не получит фокус.
-        NSApplication.shared.activate(ignoringOtherApps: true)
-        settingsWindow?.makeKeyAndOrderFront(nil)
+    private func makeConverter() -> Converter {
+        Converter(
+            currentLayout: { [layoutManager] in layoutManager.currentLayout() },
+            switchLayout: { [layoutManager] layout in
+                #if DEBUG
+                let direction = layout == .russian ? "ru" : "en"
+                if CommandLine.arguments.contains("--test-refuse-layout=\(direction)") { return false }
+                #endif
+                return layoutManager.switchTo(layout)
+            },
+            appRules: appRules,
+            undoStore: undoStore,
+            frontmostBundleID: { [weak self] in self?.currentFrontmostBundleID() },
+            prefersClipboard: { [appProfiles] in
+                AcceptanceOptions.prefersClipboard(defaultValue: appProfiles.prefersClipboard(bundleID: $0))
+            },
+            makeAXEngine: { AXConversionEngine() },
+            makeClipboardEngine: { AcceptanceOptions.makeClipboardEngine() },
+            makeUnicodeEngine: { AcceptanceOptions.makeUnicodeEngine(bundleID: $0) },
+            recoverySessionFactory: conversions.factory, recoveryOwner: conversions.owner,
+            beginInputHold: { [weak self] in
+                guard let self, let tap = self.eventTap, tap.beginInputHold() else { return false }
+                self.inputHoldingTap = tap
+                return true
+            },
+            endInputHold: { [weak self] in
+                self?.inputHoldingTap?.endInputHold()
+                self?.inputHoldingTap = nil
+            },
+            isInputHoldValid: { [weak self] in self?.inputHoldingTap?.isInputHeld == true },
+            drainPendingInput: { [weak self] in await self?.inputHoldingTap?.drainPendingEvents() },
+            onLayoutSwitched: { [weak self] source, target, startedAt in
+                self?.eventTap?.recordLayoutChange(from: source, to: target, since: startedAt)
+            },
+            onConverted: { [weak self] in
+                guard let self, self.settings.soundEnabled else { return }
+                self.soundFeedback.conversionSucceeded()
+            }
+        )
     }
 }
 

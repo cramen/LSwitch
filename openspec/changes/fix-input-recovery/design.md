@@ -312,6 +312,44 @@ Retention, deadline, lost/stop и отсутствие proxy не повторя
 quarantine сохраняется. App-owner потребляет proof через существующие Coordinator
 complete/adoptRetained методы; refused adoption не удаляет proof и не разрешает replay.
 
+#### D2.6. Атомарный logical/native arm и профильный TextEdit pilot
+
+Следующий opt-in DEBUG pilot связывает существующие компоненты, не включает factory
+в обычном режиме до приёмки 4.2. Он ограничен явно переданным локальным тестовым
+документом: AXDocument должен совпасть с file URL до любого payload/capture. Неполный
+или ошибочный pilot-флаг завершает запуск; не включает обычный legacy-путь молча.
+Подготовка профиля TextEdit остаётся metadata-only;
+её binding, ledger и AX engine принадлежат одной Session. Общий изменяемый «последний
+профиль» не используется. Tracked routing выбирает engine Session, а новый undo
+получает собственную Session/profile с сохранением точного receipt target check.
+
+После запуска ещё не вооружённого worker EventTapCore создаёт processing lease и
+проходит barrier. PreparedEventProcessingArm содержит exact state/lease/scope и
+исходный deadline. Native hold использует тот же начальный момент, а не новый срок.
+Session регистрируется у внешнего owner до async arm. Один worker block под logical
+lock проверяет epoch/activity/expiry, публикует native capture и затем ставит armed.
+Публикация — только локальные locks/state, без MainActor/IPC/AX/payload callbacks.
+Глобальный callback либо делает подготовку устаревшей до arm, либо читает logical
+дубликат после публикации. Cancel/stop закрывают scoped запрос без повторного arm.
+
+Runtime adapter — единственный потребитель native terminal handle/proof. Он сначала
+передаёт proof в complete/adoptRetained Coordinator и лишь затем завершает отдельный
+handle Session. One-shot retention callback отдельного handle вызывается вне его
+lock и передаёт отмену native flush; два независимых флага без связи не допускаются.
+После завершения Converter App wrapper одним processing finish
+применяет outcome/очищает старое слово, затем доставляет FIFO logical tail. Legacy
+очистка после этого не выполняется. Factory отказ не включает fallback в старый hold.
+Pilot допускает только профиль TextEdit AX; остальные конфигурации отказывают до
+мутации. Production включение требует отдельной живой проверки и lifecycle wiring.
+
+Runtime выдаёт scoped invocation token до trigger и сохраняет занятость до отдельного
+finish после outcome: повторный/busy trigger не может закончить чужую lease. Внешний
+owner и runtime сохраняют Session/adapter при ошибке либо deinit Converter. Focus loss
+необратимо останавливает операцию и сохраняет quarantine; OFF/TCC/tap-loss выполняют
+retention и остановку scoped driver без replay. Quit сначала ждёт RAM handover, затем
+использует прежнее explicit решение пользователя; удаление само не разрешает новый ввод
+в неподтверждённую цель. onStateChange содержит лишь сигнал перечитать metadata.
+
 ### D3. Подготовка допуска до первой мутации
 
 RecoveryAdmission связывает reservation, целевой процесс/его экземпляр, поколение
@@ -393,6 +431,12 @@ attempted/returned отдельно от payload. Если хотя бы оди�
 не доказывает неизменность редактора. Старые записи без ordinary metadata выглядят
 по-прежнему. Обнуление текущих RAM-счётчиков после удаления не переписывает историю
 попыток доставки; metadata не создаёт payload views и не читает события.
+
+Изменение защиты, причины или счётчиков той же записи обновляет только metadata
+поддерево окна. Оно не активирует скрытое окно, не создаёт новый reveal, не меняет
+revision/черновик/editor token и не отменяет уже открытое bound подтверждение.
+Обновление с чужим record UUID отвергается. Payload/editor views остаются прежними;
+повторный show не используется как механизм обновления статуса OFF/TCC/gate-loss.
 
 Закрытие окна только скрывает его; запись остаётся доступной из меню. Удаление
 требует явного подтверждения. Автоматического raw replay нет ни в прежний, ни

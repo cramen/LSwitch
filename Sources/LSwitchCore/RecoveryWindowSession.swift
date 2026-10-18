@@ -76,6 +76,14 @@ public final class RecoveryWindowSession {
         return isVisible && record?.metadata.recordIdentifier == metadata.recordIdentifier
     }
 
+    /// Статус той же записи не является новым reveal и не заменяет её actions/черновики/подтверждения.
+    @discardableResult
+    public func updateMetadata(_ metadata: RecoveryWindowMetadata) -> Bool {
+        guard let record, record.metadata.recordIdentifier == metadata.recordIdentifier else { return false }
+        record.metadata = metadata
+        return true
+    }
+
     public func hide() {
         let previous = record
         isVisible = false

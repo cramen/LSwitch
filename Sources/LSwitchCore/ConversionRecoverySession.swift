@@ -6,6 +6,7 @@ import Foundation
 public final class ConversionRecoverySession {
     public let ledger: ConversionSafetyLedger
     public let allowedMechanisms: [ConversionDiagnostics.Mechanism]
+    let boundAXEngine: (any ConversionEngine)?
     public private(set) var requiresRecovery = false
     public private(set) var ordinaryOwnershipUnconfirmed = false
     public private(set) var ordinaryTransportRetained = false
@@ -22,15 +23,18 @@ public final class ConversionRecoverySession {
 
     init?(
         context: ConversionRecoveryContext, ledger: ConversionSafetyLedger,
-        allowedMechanisms: [ConversionDiagnostics.Mechanism], adapter: any ConversionRecoveryAdapter
+        allowedMechanisms: [ConversionDiagnostics.Mechanism], adapter: any ConversionRecoveryAdapter,
+        boundAXEngine: (any ConversionEngine)? = nil
     ) {
         guard ledger.operation.generation == context.generation, ledger.decision == nil,
               ledger.inputOwner == .transaction, !allowedMechanisms.isEmpty,
               !allowedMechanisms.contains(.none),
-              ledger.profileBinding == nil || allowedMechanisms.allSatisfy({ $0 == .accessibility }) else { return nil }
+              ledger.profileBinding == nil
+                || (boundAXEngine != nil && allowedMechanisms.allSatisfy({ $0 == .accessibility })) else { return nil }
         self.context = context
         self.ledger = ledger
         self.allowedMechanisms = allowedMechanisms
+        self.boundAXEngine = boundAXEngine
         self.adapter = adapter
         guard context.isCurrent(), !Task.isCancelled else { return nil }
         guard context.admission.register(self) else { return nil }

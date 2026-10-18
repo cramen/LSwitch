@@ -50,6 +50,13 @@ final class RecoveryWindowController: NSObject, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    /// Не меняет окно, disclosure или редактор; даже скрытая запись получает актуальный статус защиты.
+    @discardableResult
+    func updateMetadata(_ metadata: RecoveryWindowMetadata) -> Bool {
+        guard session.updateMetadata(metadata), let displayed = session.snapshot.metadata else { return false }
+        return content?.updateMetadata(displayed) == true
+    }
+
     func hide() {
         content?.flushEdits()
         dismissQuitSheet()

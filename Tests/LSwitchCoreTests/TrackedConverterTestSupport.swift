@@ -99,6 +99,7 @@ final class TrackedConverterFixture {
     var ledgers: [ConversionSafetyLedger] = []
     var mechanisms: [ConversionDiagnostics.Mechanism] = [.accessibility, .clipboard]
     var profile: ConversionSafetyProfileBinding?
+    var boundAXEngine: (any ConversionEngine)?
     var latestContext: ConversionRecoveryContext?
     var layout: Layout? = .english
     var safe = true
@@ -156,7 +157,8 @@ final class TrackedConverterFixture {
         let adapter = TrackedConversionAdapter { [weak self] in self?.actions.append($0) }
         configureAdapter(adapter)
         guard let session = ConversionRecoverySession(
-            context: context, ledger: ledger, allowedMechanisms: mechanisms, adapter: adapter
+            context: context, ledger: ledger, allowedMechanisms: mechanisms, adapter: adapter,
+            boundAXEngine: boundAXEngine
         ) else { return nil }
         sessions.append(session)
         ledgers.append(ledger)

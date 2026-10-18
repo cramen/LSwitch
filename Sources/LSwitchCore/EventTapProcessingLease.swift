@@ -32,6 +32,14 @@ extension EventTapCore {
         state == .running && processingLeases.preCaptureReady(lease)
     }
 
+    #if DEBUG
+    @MainActor
+    func prepareProcessingArm(_ lease: EventProcessingLease) -> PreparedEventProcessingArm? {
+        guard state == .running, !hasLegacyInputHold, !recoveryCaptureRouter.bypassRawProcessing else { return nil }
+        return processingLeases.prepareRecipientArm(lease)
+    }
+    #endif
+
     @MainActor
     func armProcessingLease(_ lease: EventProcessingLease, activate: () -> Bool) -> Bool {
         guard state == .running else { return false }

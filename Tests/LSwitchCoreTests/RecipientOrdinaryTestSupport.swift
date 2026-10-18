@@ -29,7 +29,7 @@ final class RecipientOrdinaryFixture {
     var claims = 0
 
     init(
-        arm: Bool = true, deadline: UInt64 = 100,
+        arm: Bool = true, deadline: UInt64 = 100, startedAt: UInt64 = 0,
         observePhase: @escaping @Sendable (RecoveryCapturePhase) -> Void = { _ in }
     ) throws {
         let target = try XCTUnwrap(SystemProcessIdentity.read(processID: getpid()))
@@ -47,7 +47,7 @@ final class RecipientOrdinaryFixture {
         self.coordinator = coordinator
         let admission = try XCTUnwrap(coordinator.reserve(operation: ledger.operation, target: target))
         let operation = try XCTUnwrap(RecoveryOperation.prepare(
-            ledger: ledger, admission: admission, tapIdentifier: router.identifier, at: 0,
+            ledger: ledger, admission: admission, tapIdentifier: router.identifier, at: startedAt,
             handoverFactory: .init(prepare: { scope, identifier in
                 .init(operationScope: scope, tapIdentifier: identifier, protecting: { _, body in
                     state.withProtection(body)

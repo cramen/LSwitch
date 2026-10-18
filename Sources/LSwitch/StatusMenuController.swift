@@ -8,11 +8,13 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     var onSettings: () -> Void = {}
     var onPermissions: () -> Void = {}
     var onRefresh: () -> Void = {}
+    var onRecovery: () -> Void = {}
 
     private let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let toggle = NSMenuItem(title: "", action: nil, keyEquivalent: "e")
     private let permissions = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let warning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+    private let recovery = NSMenuItem(title: "Восстановить сохранённый ввод…", action: nil, keyEquivalent: "")
     private var enabled = true
     private var status = PermGuard.Status(accessibility: true, inputMonitoring: true)
     private var operationWarning: String?
@@ -30,6 +32,10 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
         warning.isEnabled = false
         warning.isHidden = true
         menu.addItem(warning)
+        recovery.target = self
+        recovery.action = #selector(recoveryAction)
+        recovery.isHidden = true
+        menu.addItem(recovery)
         menu.addItem(.separator())
         let settings = NSMenuItem(title: "Настройки…", action: #selector(settingsAction), keyEquivalent: ",")
         settings.target = self
@@ -64,6 +70,8 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) { onRefresh() }
 
+    func setRecoveryAvailable(_ available: Bool) { recovery.isHidden = !available }
+
     private func refresh() {
         toggle.title = enabled ? "Выключить LSwitch" : "Включить LSwitch"
         let axMark = status.accessibility ? "✓" : "✗"
@@ -82,4 +90,5 @@ final class StatusMenuController: NSObject, NSMenuDelegate {
     @objc private func toggleAction() { onToggle() }
     @objc private func settingsAction() { onSettings() }
     @objc private func permissionsAction() { onPermissions() }
+    @objc private func recoveryAction() { onRecovery() }
 }

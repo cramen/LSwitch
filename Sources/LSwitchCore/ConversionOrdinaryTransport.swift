@@ -18,6 +18,11 @@ final class ConversionOrdinaryTransport: @unchecked Sendable {
     private var waiter: CheckedContinuation<ConversionOrdinaryTransportResult?, Never>?
     private var waitingStarted = false
     private var retention = false
+    private let onRetentionRequested: @Sendable () -> Void
+
+    init(onRetentionRequested: @escaping @Sendable () -> Void = {}) {
+        self.onRetentionRequested = onRetentionRequested
+    }
 
     var retentionRequested: Bool {
         lock.lock()
@@ -27,8 +32,10 @@ final class ConversionOrdinaryTransport: @unchecked Sendable {
 
     func requestRetention() {
         lock.lock()
-        if terminal == nil { retention = true }
+        let notify = terminal == nil && !retention
+        if notify { retention = true }
         lock.unlock()
+        if notify { onRetentionRequested() }
     }
 
     /// Вызывается только после локального quiescence: повторное завершение ничего не меняет.

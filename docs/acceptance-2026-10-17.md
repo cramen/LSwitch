@@ -23,6 +23,11 @@ source manifest `.build/recovery-ordinary-v1-manifest.json`. Включены а
 порядка владения. Изолированный срез повторил build/994 теста/7 protocol-групп;
 лог `.build/recovery-994-lint-check.log`.
 
+Коммит `32e3e383fee48dd96feb54119e5cd1125660dc25` прошёл полный
+[CI](https://github.com/cramen/LSwitch/actions/runs/39026846457): build, test,
+recovery protocol и SwiftLint — success. Следующая TextEdit pilot-интеграция в этот
+принятый срез не входит.
+
 Общий `make build` / `make test` завершился 12:44:40 МСК: **954 теста, 0 failures,
 0 skipped**. Дополнительный `make check-recovery-protocol` — 6 групп без UI,
 отправки событий и clipboard. Логи `.build/input-recovery-custody-final-{build,test,protocol}.log`.
@@ -151,6 +156,32 @@ Manifest связывает 338 source-файлов с 994-test checkpoint.
 `.build/recovery-ordinary-v1-{control,flush,retain}.jsonl`. Parent payload не логируется,
 clipboard не используется; child stderr остаётся 308 неразобранных байт без содержимого.
 После каждого опыта восстановлен обычный LSwitch. Production factory остаётся выключенной.
+
+## TextEdit pilot: интеграция и выявленный предел
+
+Опциональный DEBUG pilot ограничен точным file URL собственного документа. Связаны
+profile-bound AX engine/ledger, внешний owner, atomic logical/native arm, единственный
+native waiter и переход outcome → logical FIFO → ready до запуска следующих Task.
+При потере защиты метаданные открытого recovery-окна обновляются без активации,
+повторного раскрытия или потери редактора. Текущий общий срез: **1030 тестов,
+0 failures/skipped, 7 protocol-групп**; Debug/Release build проходят. Логи
+`.build/recovery-textedit-pilot-{final-check,release-build}.log`.
+
+Кандидат v1 SHA `16b94bfa4b05d1a30d504f9e9d3718830acad433333dcc2e6aa03e2c4e44e940`,
+manifest `.build/recovery-textedit-pilot-v1-manifest.json`. Live healthy control **FAILED**:
+профиль/driver/arm подготовлены примерно за 16 мс, но AX engine занял 395 мс и
+достиг исходного lease 400 мс в final-state settlement. Собственный документ уже
+содержал ожидаемое исправление; TIS не переключён, receipt/ordinary replay не выданы,
+открыта RAM recovery с 0 удержанных событий. Это отказ приёмки здорового пути,
+а не успешная конвертация и не основание увеличить лимит.
+
+Протокол `.build/recovery-textedit-pilot-v1-full-system.log` связан с PID 41740.
+После попытки выйти через недоступный App menu CUA завис на SystemUIServer;
+runner ограничил запуск 600 секундами, принудительно завершил только candidate
+и восстановил обычный LSwitch. Graceful quit этим опытом не подтверждён.
+18.10 проверен единственный обычный процесс PID 42152; тестового driver/receiver нет.
+Следующие действия: сократить повторные metadata RPC без ослабления guard,
+проверить доступность штатного Quit из собственного окна и повторить live control.
 
 Открыты: интеграция с рабочим AX/clipboard/Unicode и логическим хвостом,
 TCC/Secure Input, lifecycle рабочего приложения и включение принятых профилей.

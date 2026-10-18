@@ -59,11 +59,16 @@ final class RecipientCaptureArming: @unchecked Sendable {
     private let state: RecipientTapDriverState
     private let capture: RecipientOrdinaryCapture
     private let activation: RecoveryRecipientActivation
+    private let processingArm: PreparedEventProcessingArm?
 
-    init(state: RecipientTapDriverState, capture: RecipientOrdinaryCapture, activation: RecoveryRecipientActivation) {
+    init(
+        state: RecipientTapDriverState, capture: RecipientOrdinaryCapture,
+        activation: RecoveryRecipientActivation, processingArm: PreparedEventProcessingArm? = nil
+    ) {
         self.state = state
         self.capture = capture
         self.activation = activation
+        self.processingArm = processingArm
     }
 
     func register(_ value: CheckedContinuation<Bool, Never>) {
@@ -74,16 +79,26 @@ final class RecipientCaptureArming: @unchecked Sendable {
     }
 
     func run() {
+        let now = processingArm?.currentTime()
         lock.lock()
         guard pending else { lock.unlock(); return }
         // Worker block сериализован с callbacks; здесь нет capture/admission/read payload.
-        let accepted = state.publishRecipientCapture(capture, activation: activation)
+        let publication = RecipientCapturePublication(state: state, capture: capture, activation: activation)
+        let accepted: Bool
+        if let processingArm, let now { accepted = processingArm.publish(publication, at: now) } else {
+            accepted = publication.publish()
+        }
         pending = false
         let result = continuation
         continuation = nil
         lock.unlock()
-        if !accepted { capture.invalidate() }
-        result?.resume(returning: accepted)
+        let current = accepted && (processingArm?.isCurrent ?? true)
+        if !current {
+            activation.cancel()
+            capture.invalidate()
+            invalidateProcessing()
+        }
+        result?.resume(returning: current)
     }
 
     func cancel() {
@@ -96,6 +111,7 @@ final class RecipientCaptureArming: @unchecked Sendable {
         // Даже уже завершённый arm больше не допускает мутацию при отменённом ожидающем task.
         state.markLost(.stopped)
         if wasPending { activation.cancel() }
+        invalidateProcessing()
         result?.resume(returning: false)
     }
 
@@ -108,7 +124,12 @@ final class RecipientCaptureArming: @unchecked Sendable {
         lock.unlock()
         state.markLost(.startupTimedOut)
         activation.cancel()
+        invalidateProcessing()
         result?.resume(returning: false)
+    }
+
+    private func invalidateProcessing() {
+        if processingArm?.matches(capture) == true { processingArm?.invalidate(.captureRefused) }
     }
 }
 #endif
