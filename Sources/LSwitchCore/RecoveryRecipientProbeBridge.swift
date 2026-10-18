@@ -154,13 +154,18 @@ public final class RecoveryRecipientProbeBridge: @unchecked Sendable {
         senderPID: Int64, marker: Int64, phase: RecoveryRecipientProbePhase,
         keyCode: UInt16, modifierFlags: UInt64
     ) -> RecoveryRecipientProbeDecision {
+        observeNativeShape(senderPID: senderPID, marker: marker, shape: .init(
+            phase: phase == .keyDown ? .keyDown : .keyUp, keyCode: keyCode, modifierFlags: modifierFlags))
+    }
+
+    func observeNativeShape(
+        senderPID: Int64, marker: Int64, shape: NativeDispatchShape
+    ) -> RecoveryRecipientProbeDecision {
         guard owns(senderPID: senderPID, marker: marker) else {
             markLost()
             return .init(allowsEvent: false, handoverRequested: gate.snapshot.handoverRequested,
                          protectionAvailable: false, admission: "header_rejected", owner: owner, nativeAdmission: nil)
         }
-        let shape = NativeDispatchShape(phase: phase == .keyDown ? .keyDown : .keyUp,
-                                        keyCode: keyCode, modifierFlags: modifierFlags)
         return decision(gate.observeOwned(marker: marker, shape: shape, target: target))
     }
 

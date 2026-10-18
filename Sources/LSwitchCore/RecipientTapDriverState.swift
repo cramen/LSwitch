@@ -225,7 +225,11 @@ final class RecipientTapDriverState: @unchecked Sendable {
         guard isHead else {
             tailObserved = increment(tailObserved)
             Self.incrementKind(kind, in: &eventTail)
-            if type == .keyDown || type == .keyUp { recordTailLocked(owned: owned, isDown: type == .keyDown) } else {
+            if owned, let shape = NativeDispatchShape.readKeyboard(event) {
+                recordTailLocked(owned: true, isDown: shape.phase.isDown)
+            } else if type == .keyDown || type == .keyUp {
+                recordTailLocked(owned: owned, isDown: type == .keyDown)
+            } else {
                 appendLocked(.targetInputAtTail)
             }
             return true
@@ -333,18 +337,13 @@ extension RecipientTapDriverState {
     }
 
     private func observeOwnedLocked(_ event: CGEvent, sender: Int64, marker: Int64) -> Bool {
-        guard event.type == .keyDown || event.type == .keyUp,
-              let keyCode = UInt16(exactly: event.getIntegerValueField(.keyboardEventKeycode)) else {
+        guard let shape = NativeDispatchShape.readKeyboard(event) else {
             markLostLocked(.eventShapeMismatch)
             headBlocked = increment(headBlocked)
             return false
         }
-        let isDown = event.type == .keyDown
-        let decision = bridge.observeOwn(
-            senderPID: sender, marker: marker, phase: isDown ? .keyDown : .keyUp,
-            keyCode: keyCode,
-            modifierFlags: event.flags.rawValue
-        )
+        let isDown = shape.phase.isDown
+        let decision = bridge.observeNativeShape(senderPID: sender, marker: marker, shape: shape)
         let observation: RecipientTapDriverObservation
         if decision.allowsEvent { observation = isDown ? .ownDownAllowed : .ownReleaseAllowed } else {
             observation = isDown ? .ownDownBlocked : .ownReleaseBlocked

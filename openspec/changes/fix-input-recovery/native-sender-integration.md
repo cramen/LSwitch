@@ -95,6 +95,14 @@ DEBUG fixture-prefix получает отдельный namespace: он мод�
 Per-PID обработка старых own packets и их release debt остаётся отдельной обязанностью
 bound sender/gate; глобальный pass-through не подменяет её.
 
+Следующая предпосылка — точная форма собственных flagsChanged для Cmd/Shift/Control/Option
+(левая и правая клавиши). Decoder читает только type/keyCode/flags, определяет Down/Up
+по биту соответствующего модификатора и сохраняет все flags для точного сравнения
+с reservation. Неизвестная modifier-клавиша отказывает. Head допускает только заранее
+submitted shape; после close допускается только release реально admitted Down.
+Tail остаётся наблюдением прохождения, не renderer completion. Прежние keyDown/keyUp
+probes используют тот же общий decoder/registry, а реальная отправка ещё не подключается.
+
 Нынешние clipboard/Unicode evidence enums различают только `receiverCompleted`,
 `preventedBeforeAdmission` и `unresolved`. Заполнение этих contracts событием
 admission из gate дало бы ложное подтверждение. Перед healthy ordinary delivery
