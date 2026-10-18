@@ -195,6 +195,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+        handleTypedInput(raw, target: target)
+    }
+
+    private func handleTypedInput(_ raw: RawKeyEvent, target: InputTarget) {
         if raw.type == .keyDown, !raw.isSynthetic {
             inputGeneration &+= 1
             converter.notifyOtherKeystroke()
