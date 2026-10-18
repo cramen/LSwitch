@@ -15,6 +15,7 @@ final class NativePreparedBatchTests: XCTestCase {
                 let copy = try XCTUnwrap(packet.copyEvent())
                 XCTAssertEqual(NativeDispatchShape.readKeyboard(copy), NativeDispatchShape.readKeyboard(events[index]))
                 XCTAssertEqual(payload(copy), payload(events[index]))
+                XCTAssertTrue(SyntheticEventMarker.isSynthetic(events[index]))
                 XCTAssertEqual(gate.status(of: packet.reservation), .prepared)
                 XCTAssertEqual(batch.packets[packet.partnerIndex].partnerIndex, index)
                 XCTAssertTrue(NativeDispatchHeader.isOwnReservedEvent(copy))
