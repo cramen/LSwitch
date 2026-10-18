@@ -34,6 +34,7 @@ extension RecoverySystemFaultProbeController {
         case .secureBefore, .secureAfter: observeSecure(reply)
         case .observingBefore, .observingAfter: observeResult(reply)
         case .stoppingSecure: finishSecure(reply)
+        case .observingSecureCapture: observeSecureCapture(reply)
         default: finish("unexpected_reply")
         }
     }
@@ -49,7 +50,6 @@ extension RecoverySystemFaultProbeController {
         awaitingReply = true
         phase = .configuring
     }
-
 
     private func beginWhenFocused(_ reply: IsolationChildMessage) {
         let expected = phase == .selecting ? "selected" : "snapshot"
@@ -80,12 +80,16 @@ extension RecoverySystemFaultProbeController {
                 if disabled == .refused { self.finish("disable_unconfirmed") }
                 return
             }
-            guard self.permitsForwardProgress, owner.arm(), self.postPair() else {
-                return self.finish("capture_refused")
-            }
-            self.phase = .capturing
+            self.beginCapture(owner)
         })
         if result == .refused { finish("driver_refused") }
+    }
+
+    private func beginCapture(_ owner: RecoverySystemFaultDiagnostic) {
+        guard permitsForwardProgress, owner.arm() else { return finish("capture_refused") }
+        if mode == .secureCaptureWindow { send(.secureInputOn, next: .secureAfter); return }
+        guard postPair() else { return finish("capture_refused") }
+        phase = .capturing
     }
 
     func checkCaptured() {
@@ -114,6 +118,13 @@ extension RecoverySystemFaultProbeController {
               reply.secure["refused"] == false, reply.secureCounts["enable"] == 1,
               reply.secureCounts["disable"] == 0 else { return finish("secure_preflight_refused") }
         secureBalanced = false
+        if mode == .secureCaptureWindow {
+            secureCaptureCurrentBefore = owner?.captureIsCurrent == true
+            guard secureCaptureCurrentBefore else { return finish("secure_capture_lease_expired") }
+            guard postPair(late: true) else { return finish("secure_capture_post_refused") }
+            phase = .observingSecureCapture
+            return
+        }
         continuation.ifCurrent(after: { self.owner?.observeSecureInput(enabled: true) }, then: {
             guard self.permitsForwardProgress else { return }
             if self.phase == .secureBefore {
@@ -170,10 +181,42 @@ extension RecoverySystemFaultProbeController {
         }
         secureBalanced = true
         peer.cancelSecureWatchdog()
+        if mode == .secureCaptureWindow {
+            observed = secureCaptureOutcome != nil
+            if owner?.hasPendingInput == true { showRetained() } else { finish("secure_capture_observed") }
+            return
+        }
         observed = mode == .secureBeforeArm
             ? beforeArmRefused && pristine(reply) && reply.fixtureSelectionUnchanged == true
             : owner?.report.session.storageOnlyAdopted == true
         if mode == .secureBeforeArm { finish("secure_before_arm_observed") } else { showRetained() }
+    }
+
+    private func observeSecureCapture(_ reply: IsolationChildMessage) {
+        guard reply.kind == "snapshot", reply.active, reply.focused, let owner,
+              reply.secure["enabled"] == true, reply.secure["owned"] == true else {
+            return finish("secure_capture_window_expired")
+        }
+        let captured = owner.report.session
+        secureCaptureCurrentAfter = owner.captureIsCurrent
+        guard secureCaptureCurrentAfter else { return finish("secure_capture_lease_expired") }
+        guard let outcome = RecoverySecureCaptureOutcome.Observation(
+            enabled: true, owned: true, events: captured.capturedEvents, bytes: captured.capturedUTF16Bytes,
+            reads: captured.payloadCountReads, received: reply.received, changes: reply.changeCount ?? -1,
+            fixtureUnchanged: reply.fixtureTextUnchanged == true && reply.fixtureSelectionUnchanged == true,
+            controlMatches: reply.controlTextMatches && reply.controlSelectionMatches
+        ).outcome else { return }
+        secureCaptureOutcome = outcome
+        owner.observeSecureInput(enabled: true)
+        phase = .disabling
+        Task { [weak self] in
+            guard let self else { return }
+            let result = await self.continuation.after({
+                if !owner.hasPendingInput { return true }
+                return await self.retainPrefix()
+            }, then: { self.send(.secureInputOff, next: .stoppingSecure) })
+            if result == .refused { self.finish("secure_capture_retention_refused") }
+        }
     }
 
     func showRetained() {

@@ -5,6 +5,7 @@ public enum RecoverySystemFaultMode: String, CaseIterable, Sendable {
     case control
     case secureBeforeArm = "secure-before-arm"
     case secureAfterCapture = "secure-after-capture"
+    case secureCaptureWindow = "secure-capture-window"
     case headBeforeArm = "head-before-arm"
     case headAfterCapture = "head-after-capture"
     case tailAfterCapture = "tail-after-capture"
@@ -65,6 +66,7 @@ public final class RecoverySystemFaultDiagnostic {
     }
 
     public var targetIsCurrent: Bool { session.targetIsCurrent }
+    public var captureIsCurrent: Bool { !faultLatched && session.captureIsCurrentForDiagnostics() }
     public var hasPendingInput: Bool { session.report.retainedBeforeAdoption || session.report.adopted }
 
     public func start() async -> Bool {

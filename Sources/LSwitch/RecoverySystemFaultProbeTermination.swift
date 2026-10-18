@@ -102,6 +102,9 @@ extension RecoverySystemFaultProbeController {
         var values: [String: Any] = [
             "mode": mode.rawValue, "phase": phase.rawValue, "status": status,
             "route": route.rawValue, "physicalInputTested": false,
+            "secureCaptureOutcome": secureCaptureOutcome?.rawValue ?? "not_observed",
+            "secureCaptureCurrentBefore": secureCaptureCurrentBefore,
+            "secureCaptureCurrentAfter": secureCaptureCurrentAfter,
             "observed": observed, "beforeArmRefused": beforeArmRefused,
             "postedPrefix": postedPrefix, "postedLateProbe": postedLate,
             "balancingReleasePosts": balancingReleases, "unpostedReleaseDebt": keyboardDebtUnresolved,

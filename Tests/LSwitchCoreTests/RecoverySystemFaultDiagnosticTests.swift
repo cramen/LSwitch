@@ -6,6 +6,22 @@ import XCTest
 
 final class RecoverySystemFaultDiagnosticTests: XCTestCase {
     @MainActor
+    func testDiagnosticCurrentCaptureRejectsExpiredLeaseWithoutPayloadReads() async throws {
+        let clock = RecoveryIsolationTestClock()
+        let fixture = try RecoverySystemFaultTestFixture(clock: { clock.read() })
+        XCTAssertFalse(fixture.facade.captureIsCurrent)
+        let started = await fixture.facade.start()
+        XCTAssertTrue(started)
+        XCTAssertTrue(fixture.facade.arm())
+        XCTAssertTrue(fixture.facade.captureIsCurrent)
+        clock.set(400_000_001)
+        XCTAssertFalse(fixture.facade.captureIsCurrent)
+        clock.set(1)
+        XCTAssertFalse(fixture.facade.captureIsCurrent)
+        XCTAssertEqual(fixture.facade.report.session.payloadCountReads, 0)
+    }
+
+    @MainActor
     func testObservedSecureBeforeStartRefusesWithoutCaptureAndNeverClaimsProductionGuard() async throws {
         let fixture = try RecoverySystemFaultTestFixture()
         fixture.facade.observeSecureInput(enabled: true)
@@ -119,8 +135,8 @@ private final class RecoverySystemFaultTestFixture {
     let driver: RecoverySystemFaultTestDriver
     let facade: RecoverySystemFaultDiagnostic
 
-    init() throws {
-        base = try RecoveryIsolationFixture(clock: { 1 })
+    init(clock: @escaping @Sendable () -> UInt64 = { 1 }) throws {
+        base = try RecoveryIsolationFixture(clock: clock)
         driver = RecoverySystemFaultTestDriver(bridge: base.session.bridge)
         facade = try XCTUnwrap(RecoverySystemFaultDiagnostic(session: base.session, driver: driver))
     }

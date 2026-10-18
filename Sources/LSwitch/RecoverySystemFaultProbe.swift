@@ -28,6 +28,7 @@ enum RecoverySystemFaultPhase: String {
     case ready, configuring, selecting, waitingFocus, starting, capturing
     case secureBefore, secureAfter, disabling, observingBefore, observingAfter, stoppingSecure
     case interactive, finishing
+    case observingSecureCapture
 }
 
 @MainActor
@@ -64,6 +65,9 @@ final class RecoverySystemFaultProbeController: NSObject, NSApplicationDelegate 
     var childAborted = false
     var cleanupCompleted = false
     var status = "starting"
+    var secureCaptureOutcome: RecoverySecureCaptureOutcome?
+    var secureCaptureCurrentBefore = false
+    var secureCaptureCurrentAfter = false
 
     init(mode: RecoverySystemFaultMode, route: RecoveryDiagnosticRoute) {
         self.mode = mode
@@ -128,7 +132,7 @@ final class RecoverySystemFaultProbeController: NSObject, NSApplicationDelegate 
             return finish("watchdog")
         }
         if phase == .capturing { checkCaptured(); return }
-        if [.waitingFocus, .observingBefore, .observingAfter].contains(phase),
+        if [.waitingFocus, .observingBefore, .observingAfter, .observingSecureCapture].contains(phase),
            !awaitingReply, DispatchTime.now().uptimeNanoseconds >= nextSnapshotAt { sendSnapshot() }
     }
 

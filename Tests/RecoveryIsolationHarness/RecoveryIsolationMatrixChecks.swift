@@ -18,8 +18,9 @@ enum RecoveryIsolationMatrixChecks {
         try armRequestHasNoPayload()
         try RecoverySecureInputChecks.run()
         try RecoveryDiagnosticPairChecks.run()
+        try RecoverySecureCaptureChecks.run()
         try await RecoverySystemFaultContinuationChecks.run()
-        print("RecoveryIsolationMatrixChecks: 26 groups passed; no UI/events/clipboard")
+        print("RecoveryIsolationMatrixChecks: 27 groups passed; no UI/events/clipboard")
     }
 
     static func require(_ value: Bool, _ name: String) throws {

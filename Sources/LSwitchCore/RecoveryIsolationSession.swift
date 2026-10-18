@@ -147,6 +147,14 @@ public final class RecoveryIsolationSession {
         return true
     }
 
+    /// Проверяет живой admission без регистрации команды или чтения payload.
+    func captureIsCurrentForDiagnostics() -> Bool {
+        guard !Task.isCancelled, !detached, router != nil, targetIsCurrent,
+              protection?.refreshProtection() == true, let operation else { return false }
+        attachment?.expire()
+        return operation.capturePort.permitsMutation(for: operation.capturePort.scope)
+    }
+
     /// Это submission отдельной fixture IPC-команды, не подтверждение или приёмка AX setter.
     public func beginFixtureSelectionCommand() -> Bool {
         guard !Task.isCancelled, selectionToken == nil, targetIsCurrent,

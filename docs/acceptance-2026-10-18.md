@@ -210,3 +210,35 @@ CI `f8bd26d` прошёл Debug/Release/test/protocol, но отклонил 12 
 multiple-closure syntax, optional initialization и сложность двух diagnostic handlers.
 Исправлены явные `then:` labels, implicit nil и выделены небольшие handlers без
 изменения порядка действий. Результат следующего CI фиксируется отдельно.
+
+## D7.11: интервал до обнаружения Secure Input
+
+DEBUG mode `secure-capture-window` вооружает capture без исходного prefix, ждёт
+подтверждённого Secure Input и отправляет фиксированную пару **до** искусственного
+вызова observeSecureInput. V1 увидел доставку без capture; для исключения истёкшего
+lease добавлены явные current checks до post и после ответа child.
+
+V2 parent SHA `d033f7703d26044db217a56b765508664743f44346af9a664a3d274a7c7684f4`,
+receiver SHA `539afddd17d3f86004c02d5e6263882f0d4cb6a086affbb987eb6beee05ae336`.
+Manifest `.build/secure-capture-window-v2-manifest.json`. **1113 unit-тестов**, без
+failures/skips, **27 pure protocol-групп**. Проверка expiry отдельно подтверждает,
+что возврат тестовых часов назад не оживляет отказавший capture.
+
+На этом бинарнике HID observation получил `deliveredWithoutCapture`:
+secureCaptureCurrentBefore=true и secureCaptureCurrentAfter=true, capturedEvents=0,
+capturedBytes=0, countReads=0; child получил ровно prefixDown/prefixRelease и
+подтвердил ожидаемые текст/каретку. Secure enabled/owned проверены при наблюдении;
+до этого программный fault latch не закрывался. Это отдельное наблюдение защиты
+synthetic HID от захвата во время Secure Input при живом admission, не результат
+expiry или преждевременного handover.
+
+Положительный HID control на том же V2 также прошёл. Оба child завершились с
+exit0/EOF/finalReply, cleanup=true, debt=false и watchdog=false; собственные
+Enable/Disable1/1, итоговый global enabled=false. Пустая тестовая recovery-запись
+удалена явно, ordinary восстановлен. Логи:
+`.build/secure-capture-window-v2-{observation,control}.jsonl`.
+Физическая клавиатура и весь системный допуск этим опытом не заменяются;
+privacyGuardAccepted=false сохранён.
+
+CI `c446e62` прошёл build/test/protocol, но оставил одно замечание `vertical_whitespace`
+в диагностическом helper. Лишняя пустая строка удалена в следующем срезе.
