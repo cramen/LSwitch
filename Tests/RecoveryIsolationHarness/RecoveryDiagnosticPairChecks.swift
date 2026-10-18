@@ -9,6 +9,8 @@ enum RecoveryDiagnosticPairChecks {
         try focusLossBalancesOnlyRelease()
         try identityLossLeavesExplicitDebt()
         try completedAndReentrantPairAreSingleUse()
+        try balancingUsesOriginalTargetRoute()
+        try routeParsingFailsClosed()
     }
 
     private static func preparation() throws {
@@ -85,6 +87,33 @@ enum RecoveryDiagnosticPairChecks {
         try check(posts == [1, 2] && !nestedAccepted, "ordinary Up is not repeated by defer or reentry")
         try check(result?.completed == true && result?.inconclusive == false, "complete local pair")
         try check(pair.dispatch(nested) == nil && !nestedAccepted, "prepared pair has one owner")
+    }
+
+    private static func balancingUsesOriginalTargetRoute() throws {
+        for losesFocus in [false, true] {
+            let pair = try preparedPair()
+            var focused = true
+            var global: [Int] = []
+            var originalTarget: [Int] = []
+            let result = pair.dispatch(.init(canSubmit: { _, _ in focused }, canBalance: { _ in true },
+                                            post: { kind, packet in
+                global.append(packet)
+                if kind == .down && losesFocus { focused = false }
+            }, balance: { originalTarget.append($0) }))
+            try check(global == (losesFocus ? [1] : [1, 2]), "no global Up into a new foreground")
+            try check(originalTarget == (losesFocus ? [2] : []), "only balancing release uses original PID")
+            try check(result?.inconclusive == losesFocus, "fallback release does not certify normal pair")
+        }
+    }
+
+    private static func routeParsingFailsClosed() throws {
+        let flag = "--recovery-system-fault-route"
+        try check(RecoveryDiagnosticRoute.parse([]) == .pid, "default remains addressed route")
+        try check(RecoveryDiagnosticRoute.parse([flag + "=hid"]) == .hid, "explicit HID route")
+        for values in [[flag], [flag + "="], [flag + "=unknown"], [flag + "extra=hid"],
+                       [flag + "=hid", flag + "=pid"]] {
+            try check(RecoveryDiagnosticRoute.parse(values) == nil, "malformed route refuses startup")
+        }
     }
 
     private static func preparedPair() throws -> RecoveryDiagnosticPair<Int> {

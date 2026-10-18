@@ -184,3 +184,29 @@ pairInconclusive=false, watchdog=false. Собственные Secure Enable/Dis
 nativePrivacyAccepted=false и productionEnabled=false. Не принимаем обход Secure/
 head как защиту от приватного ввода или renderer ACK. Общие задачи 2–4/6 остаются
 открыты до производственного подключения, остальных движков и полного системного допуска.
+
+## D7.10: глобальный synthetic HID
+
+Отдельный кандидат parent SHA
+`64548019e579b2595a58da50ddc1cc296248b90a0cd8cb1309015ff3f8249ed6`, receiver SHA
+`596905c087192fa0fc6897fa2efbd096c47f4a8cf19e2d28c061b6f0f1af6b25`;
+source/manifest `.build/system-fault-hid-v1-{source,manifest.json}`.
+1112 unit-тестов, 26 pure protocol-групп, Debug/Release — PASS.
+Маршрут выбирается явно; default остаётся pid. Обычная пара проверяет foreground
+перед каждым post, а balancing Up после потери фокуса всегда адресован прежнему PID+birth.
+
+HID control подтвердил реальную доставку двух fixture-событий и ожидаемое изменение
+поля. Secure-after-capture сохранил 2 события/16 байт в RAM; поздняя synthetic HID
+пара дошла до child, а сохранённый prefix не воспроизводился. Явный reveal показал
+fixture; после подтверждённого удаления child exit0/EOF/finalReply, cleanup=true,
+debt=false, watchdog=false; Enable/Disable1/1, global enabled=false. Обычный LSwitch
+восстановлен. Логи `.build/system-fault-hid-v1-{control,secure-after}.jsonl`.
+
+Это проверяет handover **после явного сообщения о Secure Input**, а не отсутствие
+захвата между реальным включением Secure Input и его обнаружением. Этот интервал
+и физическая клавиатура ещё требуют проверки; privacyGuardAccepted=false сохраняется.
+
+CI `f8bd26d` прошёл Debug/Release/test/protocol, но отклонил 12 SwiftLint замечаний:
+multiple-closure syntax, optional initialization и сложность двух diagnostic handlers.
+Исправлены явные `then:` labels, implicit nil и выделены небольшие handlers без
+изменения порядка действий. Результат следующего CI фиксируется отдельно.

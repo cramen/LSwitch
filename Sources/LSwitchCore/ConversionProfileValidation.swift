@@ -60,5 +60,5 @@ struct CanonicalConversionRequestInput {
     let sourceLayout: Layout?
     let useSelection: Bool
     let diagnostics: ConversionDiagnostics
-    var undoAnchor: ConversionUndoProfileAnchor? = nil
+    var undoAnchor: ConversionUndoProfileAnchor?
 }

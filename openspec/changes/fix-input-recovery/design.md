@@ -986,6 +986,21 @@ admission. Автоматического rearm и повторной отпра
 production guard. Cached clear не получает свойства instantaneous ACK, произвольный
 TTL cache не вводится. Без отдельного guard и полной системной приёмки 4.2 не закрывается.
 
+### D7.10. Разделение адресного и глобального HID diagnostic route
+
+D7.9 показал доставку late postToPid после Secure Input/head loss; этот результат
+не переносится на глобальный путь. Следующий own-child опыт добавляет явный DEBUG
+route `pid|hid`, по умолчанию pid. Оба пакета готовятся до Down, каждый обычный post
+проверяет тот же живой child PID+birth и настоящий foreground; при смене цели новых
+Down нет. Balancing Up всегда адресуется исходному process instance, даже при HID
+route, и не публикуется глобально в новое приложение. Отказ/частичная пара остаётся
+inconclusive. Malformed/дублированный route и route без mode завершают запуск до App.
+
+Первым идёт HID control с фактическим receiver text/selection, затем Secure Input
+до/после capture и tap-loss. Маршрут записывается в metadata. Synthetic global HID
+не объявляется физической клавиатурой, renderer ACK или достаточным privacy admission.
+Собственные TTL/Enable/Disable/watchdog и сохранение RAM остаются прежними.
+
 ## Risks / Trade-offs
 
 - Отказ внешнего API после submission → неизвестный исход и recovery, а не повторная мутация.

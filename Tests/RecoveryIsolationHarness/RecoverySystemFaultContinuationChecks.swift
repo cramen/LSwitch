@@ -23,7 +23,7 @@ enum RecoverySystemFaultContinuationChecks {
             await gate.after({
                 actions.append(name)
                 return await barrier.wait()
-            }) { actions.append(contentsOf: counters) }
+            }, then: { actions.append(contentsOf: counters) })
         }
         await barrier.waitUntilEntered()
         quitPending = true
@@ -41,7 +41,7 @@ enum RecoverySystemFaultContinuationChecks {
         var calls = 0
         gate.stop()
         quitPending = false
-        let result = await gate.after({ calls += 1; return true }) { calls += 1 }
+        let result = await gate.after({ calls += 1; return true }, then: { calls += 1 })
         try check(!quitPending && result == .stopped && calls == 0, "cancelled Quit never reopens test actions")
         try check(!gate.ifCurrent(after: { calls += 1 }, then: { calls += 1 }), "stopped observation is inert")
         try check(calls == 0, "no observation side effect after stop")
@@ -52,16 +52,16 @@ enum RecoverySystemFaultContinuationChecks {
         let barrier = Barrier()
         var actions: [String] = []
         let pending = Task { @MainActor in
-            await gate.after({ actions.append("start"); return await barrier.wait() }) {
+            await gate.after({ actions.append("start"); return await barrier.wait() }, then: {
                 actions.append(contentsOf: ["arm", "prefix"])
-            }
+            })
         }
         await barrier.waitUntilEntered()
         try check(actions == ["start"], "no continuation before actual asynchronous return")
         barrier.resume(true)
         let result = await pending.value
         try check(result == .completed && actions == ["start", "arm", "prefix"], "normal ordering")
-        let refused = await gate.after({ false }) { actions.append("unexpected") }
+        let refused = await gate.after({ false }, then: { actions.append("unexpected") })
         try check(refused == .refused && actions.count == 3, "refused operation cannot continue")
     }
 

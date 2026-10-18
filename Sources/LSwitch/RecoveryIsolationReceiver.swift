@@ -154,15 +154,9 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         case .handshake:
             reply("ready", sequence: request.sequence, includeTitle: true)
         case .configure:
-            guard !configured, let markers = request.markers,
-                  editor.configure(senderPID: senderPID, markers: markers) else { return finish("protocol") }
-            configured = true
-            reply("configured", sequence: request.sequence)
+            configureFixture(request, editor: editor)
         case .selectFixture:
-            guard configured, !selected, editor.selectFixture() else { return finish("protocol") }
-            selected = true
-            focusFixture()
-            reply("selected", sequence: request.sequence)
+            selectFixture(editor, sequence: request.sequence)
         case .armEventMatrix: armMatrix(editor, sequence: request.sequence)
         case .secureInputOn: configureSecureInput(enabled: true, sequence: request.sequence)
         case .secureInputOff: configureSecureInput(enabled: false, sequence: request.sequence)
@@ -171,6 +165,20 @@ private final class RecoveryIsolationReceiverController: NSObject, NSApplication
         case .quit:
             finish("quit")
         }
+    }
+
+    private func configureFixture(_ request: RecoveryIsolationRequest, editor: RecoveryIsolationReceiverView) {
+        guard !configured, let markers = request.markers,
+              editor.configure(senderPID: senderPID, markers: markers) else { return finish("protocol") }
+        configured = true
+        reply("configured", sequence: request.sequence)
+    }
+
+    private func selectFixture(_ editor: RecoveryIsolationReceiverView, sequence: Int) {
+        guard configured, !selected, editor.selectFixture() else { return finish("protocol") }
+        selected = true
+        focusFixture()
+        reply("selected", sequence: sequence)
     }
 
     private func armMatrix(_ editor: RecoveryIsolationReceiverView, sequence: Int) {

@@ -11,7 +11,7 @@ public struct ConversionRecoveryContext {
     var identifier: UUID { admission.identifier }
     let isCurrent: Converter.ContextCheck
     let canCleanup: Converter.ContextCheck
-    var revisionFence: ConverterRevisionFence? = nil
+    var revisionFence: ConverterRevisionFence?
 }
 
 /// Коррекция применяется transport к доставляемым копиям, а не к исходной RAM-записи.

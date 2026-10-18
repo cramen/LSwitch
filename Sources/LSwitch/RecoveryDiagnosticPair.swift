@@ -1,6 +1,18 @@
 #if DEBUG
 import Foundation
 
+enum RecoveryDiagnosticRoute: String {
+    case pid, hid
+
+    static func parse(_ arguments: [String]) -> Self? {
+        let flag = "--recovery-system-fault-route"
+        let values = arguments.filter { $0.hasPrefix(flag) }
+        guard !values.isEmpty else { return .pid }
+        guard values.count == 1, let value = values.first, value.hasPrefix(flag + "=") else { return nil }
+        return Self(rawValue: String(value.dropFirst(flag.count + 1)))
+    }
+}
+
 enum RecoveryDiagnosticPacketKind: Equatable { case down, release }
 
 struct RecoveryDiagnosticPairResult {
@@ -19,6 +31,7 @@ final class RecoveryDiagnosticPair<Packet> {
         let canSubmit: (RecoveryDiagnosticPacketKind, Packet) -> Bool
         let canBalance: (Packet) -> Bool
         let post: (RecoveryDiagnosticPacketKind, Packet) -> Void
+        var balance: ((Packet) -> Void)?
     }
 
     private let down: Packet
@@ -45,7 +58,7 @@ final class RecoveryDiagnosticPair<Packet> {
             if progress.downAttempted, !progress.releaseAttempted, actions.canBalance(release) {
                 progress.releaseAttempted = true
                 progress.balancingRelease = true
-                actions.post(.release, release)
+                if let balance = actions.balance { balance(release) } else { actions.post(.release, release) }
             }
         }
         guard actions.canSubmit(.down, down) else { return }

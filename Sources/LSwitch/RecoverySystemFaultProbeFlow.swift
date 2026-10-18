@@ -26,15 +26,7 @@ extension RecoverySystemFaultProbeController {
         guard permitsForwardProgress else { return }
         switch phase {
         case .ready:
-            guard reply.kind == "ready", reply.windowTitle == "LSwitch Isolation Receiver \(peer.nonce)",
-                  let markers else { return finish("ready_invalid") }
-            let values: [RecoveryIsolationLabel: Int64] = [.prefixDown: markers.prefixDown,
-                .prefixRelease: markers.prefixRelease, .challengeDown: markers.challengeDown,
-                .challengeRelease: markers.challengeRelease]
-            guard let sequence = peer.send(.configure, markers: values) else { return finish("configure_failed") }
-            expectedSequence = sequence
-            awaitingReply = true
-            phase = .configuring
+            configureChild(reply)
         case .configuring:
             guard reply.kind == "configured", pristine(reply) else { return finish("configure_invalid") }
             send(.selectFixture, next: .selecting)
@@ -45,6 +37,19 @@ extension RecoverySystemFaultProbeController {
         default: finish("unexpected_reply")
         }
     }
+
+    private func configureChild(_ reply: IsolationChildMessage) {
+        guard reply.kind == "ready", reply.windowTitle == "LSwitch Isolation Receiver \(peer.nonce)",
+              let markers else { return finish("ready_invalid") }
+        let values: [RecoveryIsolationLabel: Int64] = [.prefixDown: markers.prefixDown,
+            .prefixRelease: markers.prefixRelease, .challengeDown: markers.challengeDown,
+            .challengeRelease: markers.challengeRelease]
+        guard let sequence = peer.send(.configure, markers: values) else { return finish("configure_failed") }
+        expectedSequence = sequence
+        awaitingReply = true
+        phase = .configuring
+    }
+
 
     private func beginWhenFocused(_ reply: IsolationChildMessage) {
         let expected = phase == .selecting ? "selected" : "snapshot"
@@ -63,15 +68,15 @@ extension RecoverySystemFaultProbeController {
 
     private func startCandidate() async {
         guard permitsForwardProgress, let owner else { return }
-        let result = await continuation.after({ await owner.start() }) {
+        let result = await continuation.after({ await owner.start() }, then: {
             guard self.permitsPost else { return self.finish("driver_context_refused") }
             if self.mode == .secureBeforeArm { self.send(.secureInputOn, next: .secureBefore); return }
             if self.mode == .headBeforeArm {
-                let disabled = await self.continuation.after({ await owner.disable(.head) }) {
+                let disabled = await self.continuation.after({ await owner.disable(.head) }, then: {
                     guard self.permitsForwardProgress else { return }
                     self.beforeArmRefused = !owner.arm()
                     self.phase = .observingBefore
-                }
+                })
                 if disabled == .refused { self.finish("disable_unconfirmed") }
                 return
             }
@@ -79,7 +84,7 @@ extension RecoverySystemFaultProbeController {
                 return self.finish("capture_refused")
             }
             self.phase = .capturing
-        }
+        })
         if result == .refused { finish("driver_refused") }
     }
 
@@ -97,7 +102,7 @@ extension RecoverySystemFaultProbeController {
             guard let self, self.permitsForwardProgress else { return }
             let result = await self.continuation.after({
                 await owner.disable(self.mode == .tailAfterCapture ? .tail : .head)
-            }) { await self.retireThenChallenge() }
+            }, then: { await self.retireThenChallenge() })
             if result == .refused { self.finish("disable_unconfirmed") }
         }
     }
@@ -124,12 +129,12 @@ extension RecoverySystemFaultProbeController {
         guard permitsForwardProgress, !retirementPending else { return }
         retirementPending = true
         defer { retirementPending = false }
-        let result = await continuation.after({ await self.retainPrefix() }) {
+        let result = await continuation.after({ await self.retainPrefix() }, then: {
             guard self.permitsPost, self.postPair(late: true) else {
                 return self.finish("challenge_refused")
             }
             self.phase = .observingAfter
-        }
+        })
         if result == .refused { finish("retirement_refused") }
     }
 
@@ -203,6 +208,9 @@ extension RecoverySystemFaultProbeController {
             self.peer.isRunning && self.peer.processID == originalPID && owner.targetIsCurrent
                 && Self.packetMatches(event, .release, markers: markers)
         }, post: { _, event in
+            if late { self.postedLate += 1 } else { self.postedPrefix += 1 }
+            if self.route == .hid { event.post(tap: .cghidEventTap) } else { event.postToPid(originalPID) }
+        }, balance: { event in
             if late { self.postedLate += 1 } else { self.postedPrefix += 1 }
             event.postToPid(originalPID)
         }))

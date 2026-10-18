@@ -101,6 +101,7 @@ extension RecoverySystemFaultProbeController {
     func report() {
         var values: [String: Any] = [
             "mode": mode.rawValue, "phase": phase.rawValue, "status": status,
+            "route": route.rawValue, "physicalInputTested": false,
             "observed": observed, "beforeArmRefused": beforeArmRefused,
             "postedPrefix": postedPrefix, "postedLateProbe": postedLate,
             "balancingReleasePosts": balancingReleases, "unpostedReleaseDebt": keyboardDebtUnresolved,

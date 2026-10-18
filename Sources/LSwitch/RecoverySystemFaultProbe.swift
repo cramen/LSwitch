@@ -8,12 +8,14 @@ enum RecoverySystemFaultProbe {
         let flag = "--recovery-system-fault"
         let prefix = flag + "="
         let values = arguments.filter { $0.hasPrefix(prefix) }
-        guard !values.isEmpty || arguments.contains(flag) else { return nil }
+        let hasRoute = arguments.contains { $0.hasPrefix("--recovery-system-fault-route") }
+        guard !values.isEmpty || arguments.contains(flag) || hasRoute else { return nil }
         #if DEBUG
         guard !arguments.contains(flag), values.count == 1, let value = values.first,
               let mode = RecoverySystemFaultMode(rawValue: String(value.dropFirst(prefix.count))),
+              let route = RecoveryDiagnosticRoute.parse(arguments),
               Bundle.main.bundleIdentifier == "ru.cramen.lswitch" else { return 2 }
-        let controller = RecoverySystemFaultProbeController(mode: mode)
+        let controller = RecoverySystemFaultProbeController(mode: mode, route: route)
         return withExtendedLifetime(controller) { controller.run() }
         #else
         return 2
@@ -31,6 +33,7 @@ enum RecoverySystemFaultPhase: String {
 @MainActor
 final class RecoverySystemFaultProbeController: NSObject, NSApplicationDelegate {
     let mode: RecoverySystemFaultMode
+    let route: RecoveryDiagnosticRoute
     let peer = RecoveryIsolationChildProcess()
     let window = RecoveryWindowController()
     let startedAt = DispatchTime.now().uptimeNanoseconds
@@ -62,7 +65,11 @@ final class RecoverySystemFaultProbeController: NSObject, NSApplicationDelegate 
     var cleanupCompleted = false
     var status = "starting"
 
-    init(mode: RecoverySystemFaultMode) { self.mode = mode; super.init() }
+    init(mode: RecoverySystemFaultMode, route: RecoveryDiagnosticRoute) {
+        self.mode = mode
+        self.route = route
+        super.init()
+    }
 
     func run() -> Int32 {
         guard CGPreflightPostEventAccess(), CGPreflightListenEventAccess() else { return 2 }
