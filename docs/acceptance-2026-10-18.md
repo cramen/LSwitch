@@ -242,3 +242,37 @@ privacyGuardAccepted=false сохранён.
 
 CI `c446e62` прошёл build/test/protocol, но оставил одно замечание `vertical_whitespace`
 в диагностическом helper. Лишняя пустая строка удалена в следующем срезе.
+
+## Реальный отзыв и возврат Accessibility
+
+Коммит `35420507bd9a9424eff209d090f3ba868704234a` прошёл полный
+[CI 39155342553](https://github.com/cramen/LSwitch/actions/runs/39155342553):
+Debug/Release, 1113 тестов, recovery protocol и strict SwiftLint.
+
+Отдельный lifecycle v9 SHA
+`7a8bc6a6c3eed4a9df653ec124d377436feaf09ad61d28e571e67228e05ccd4d`, PID 64002,
+manifest `.build/recovery-lifecycle-v9-manifest.json`. В своём TextEdit fixture
+`missing-after-selection` снова подтвердил injected, selectionAttempts=1,
+selected=true, prefixEvents=2/countReads=2/prefixBytes=4. После системной
+аутентификации пользователя явно наблюдались LSwitch Accessibility OFF и ON.
+
+При OFF приложение в 21:49:31 МСК записало «Не хватает разрешений — перехват остановлен».
+Окно recovery сообщило о недоступной защите и сохранило 2 события/4 байта;
+явное раскрытие показало `x` и keyUp. Собственный `ghbdtn` остался выделенным,
+автоматического replay не произошло. После ON в 21:50:11 Event tap запущен снова;
+исходный текст и RAM-запись остались прежними, старая операция не продолжилась.
+Quit запросил подтверждение удаления только тестовой записи, завершился штатно;
+runner подтвердил `launcherExit 0` и восстановил ordinary LSwitch. Accessibility
+возвращён ON. Другие записи разрешений не менялись агентом.
+
+Логи `.build/recovery-lifecycle-v9-accessibility-{driver,system,revoked,restored}.log`.
+Более ранние переходы разрешений в том же журнале не используются как отдельная
+приёмка: учитывается только явно выполненный и наблюдённый агентом цикл OFF→ON.
+
+Отдельный сценарий Input Monitoring на том же v9 подготовил собственную RAM-запись,
+но системный список «Мониторинг ввода» не содержит LSwitch. Отдельного переключателя
+для отзыва нет; новую запись/разрешение не создавали. Приложение получает доступ к
+прослушиванию при существующем Accessibility. Независимый переход Listen permission
+не принят на этом стенде; цикл Accessibility не переименовывается в такой тест.
+Тестовая запись удалена через штатный Quit, ordinary восстановлен. Локатор подготовки:
+`.build/recovery-lifecycle-v9-input-monitoring-driver.log`.
