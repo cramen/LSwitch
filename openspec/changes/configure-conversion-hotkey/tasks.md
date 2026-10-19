@@ -11,3 +11,7 @@
 ## 3. Приёмка
 
 - [x] 3.1 Выполнить make test, build/Release, strict CI и OpenSpec validate; записать результаты и ограничения в документацию.
+
+## 4. Option+Space
+
+- [ ] 4.1 Разрешить Option+Space и добавить «Пробел» в UI; проверить валидатор, persistence, repeat, обычный пробел и живые conversion/undo без лишнего пробела, build/test/strict CI.

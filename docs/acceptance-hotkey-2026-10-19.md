@@ -45,3 +45,17 @@ OpenSpec strict: 7/7. Все пять задач change выполнены.
 Прежняя сборка сохранена в `.build/LSwitch-before-hotkey-20261019.app`.
 Старые scratch-runner, ожидающие SHA 513b по обычному пути, больше не подходят
 без явной актуализации ожидаемой сборки; прежняя приёмка остаётся привязанной к старому SHA.
+
+## Дополнение: Option+Space
+
+Разрешено отдельное сочетание Option+Space без Control/Command; «Пробел» добавлен
+в список клавиш. Голый пробел, Shift+Space и Option с буквами по-прежнему не допускаются.
+Добавлен тест persistence, modifier validation, repeat, reset и обычного пробела.
+Полный набор — 1150 тестов без failures/skips; Release build успешен.
+
+В собственной TextEdit-фикстуре Option+Space дал converted/undone с точным возвратом
+`ghbdtn` без добавочного пробела. При активном Option+Space обычный Space дал
+`ghbdtn `, подтверждённый AX и точным selectText. Первый запуск драйвера без ожидания
+доставку plain Space не подтвердил; повтор с wait:300 подтвердил её и в control,
+и с активным сочетанием. Логи `.build/option-space-{test,outcomes,plain-active}.log`.
+После теста возвращён двойной Shift; default приложения не изменён.

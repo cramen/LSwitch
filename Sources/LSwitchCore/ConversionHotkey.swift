@@ -17,7 +17,8 @@ public struct ConversionHotkey: Codable, Equatable, Sendable {
     public var isValid: Bool {
         guard let keyCode else { return modifiers == 0 }
         let command = CGEventFlags.maskCommand.rawValue | CGEventFlags.maskControl.rawValue
-        return Self.keys.contains { $0.code == keyCode } && modifiers & command != 0
+        return Self.keys.contains { $0.code == keyCode } && (modifiers & command != 0
+            || (keyCode == 49 && modifiers == CGEventFlags.maskAlternate.rawValue))
             && modifiers & ~Self.modifierMask == 0
     }
 
@@ -43,7 +44,7 @@ public struct ConversionHotkey: Codable, Equatable, Sendable {
             (16, "Y"), (6, "Z"), (29, "0"), (18, "1"), (19, "2"), (20, "3"), (21, "4"), (23, "5"),
             (22, "6"), (26, "7"), (28, "8"), (25, "9"), (122, "F1"), (120, "F2"), (99, "F3"),
             (118, "F4"), (96, "F5"), (97, "F6"), (98, "F7"), (100, "F8"), (101, "F9"),
-            (109, "F10"), (103, "F11"), (111, "F12")
+            (109, "F10"), (103, "F11"), (111, "F12"), (49, "Пробел")
         ]
         return letters.map { Key(code: $0.0, label: $0.1) }
     }()

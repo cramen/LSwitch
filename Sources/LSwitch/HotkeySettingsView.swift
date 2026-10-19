@@ -24,9 +24,9 @@ struct HotkeySettingsView: View {
                     modifier("⌘", flag: .maskCommand)
                     Picker("Клавиша", selection: $keyCode) {
                         ForEach(ConversionHotkey.keys) { key in Text(key.label).tag(key.code) }
-                    }.labelsHidden().accessibilityLabel("Клавиша").frame(width: 90)
+                    }.labelsHidden().accessibilityLabel("Клавиша").frame(width: 120)
                 }
-                Text("Нужен Control или Command. Клавиша выбирается по позиции в латинской раскладке.")
+                Text("Control или Command; также Option+Пробел. Клавиша — по позиции в латинской раскладке.")
                     .font(.caption).foregroundStyle(.secondary)
                 Text("Сочетание резервируется глобально. Конфликты с командами приложений могут не обнаруживаться.")
                     .font(.caption).foregroundStyle(.secondary)

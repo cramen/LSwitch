@@ -23,7 +23,7 @@ public final class HotkeySettingsController: ObservableObject {
     @discardableResult
     public func apply(_ hotkey: ConversionHotkey) -> Bool {
         guard hotkey.isValid else {
-            message = "Выберите клавишу и хотя бы один модификатор ⌃ Control или ⌘ Command."
+            message = "Выберите Control или Command с клавишей либо Option+Пробел."
             return false
         }
         if hotkey == activeHotkey, hotkey == settings.conversionHotkey, active {

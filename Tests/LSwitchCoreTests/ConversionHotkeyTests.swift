@@ -6,6 +6,34 @@ import XCTest
 final class ConversionHotkeyTests: XCTestCase {
     private let custom = ConversionHotkey(keyCode: 40, modifiers: CGEventFlags.maskControl.rawValue)
 
+    func testOptionSpaceValidationPersistenceAndDetection() throws {
+        let hotkey = ConversionHotkey(keyCode: 49, modifiers: CGEventFlags.maskAlternate.rawValue)
+        XCTAssertTrue(hotkey.isValid)
+        XCTAssertEqual(hotkey.title, "⌥Пробел")
+        XCTAssertFalse(ConversionHotkey(keyCode: 49, modifiers: 0).isValid)
+        XCTAssertFalse(ConversionHotkey(keyCode: 49, modifiers: CGEventFlags.maskShift.rawValue).isValid)
+        let name = "LSwitch.OptionSpaceTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let settings = SettingsStore(defaults: defaults)
+        settings.conversionHotkey = hotkey
+        XCTAssertEqual(SettingsStore(defaults: defaults).conversionHotkey, hotkey)
+        var detector = ConversionHotkeyDetector()
+        let down = RawKeyEvent(type: .keyDown, keyCode: 49, characters: "\u{00A0}",
+                               modifierFlags: hotkey.modifiers, isSynthetic: false, timestamp: 100)
+        XCTAssertEqual(detector.handle(down, hotkey: hotkey), .trigger)
+        detector.resetSequence()
+        XCTAssertEqual(detector.handle(down, hotkey: hotkey), .consumed)
+        let release = RawKeyEvent(type: .keyUp, keyCode: 49, characters: "",
+                                  modifierFlags: 0, isSynthetic: false, timestamp: 200)
+        _ = detector.handle(release, hotkey: hotkey)
+        let plain = RawKeyEvent(type: .keyDown, keyCode: 49, characters: " ",
+                                modifierFlags: 0, isSynthetic: false, timestamp: 300)
+        XCTAssertEqual(detector.handle(plain, hotkey: hotkey), .none)
+        _ = detector.handle(release, hotkey: hotkey)
+        XCTAssertEqual(detector.handle(down, hotkey: hotkey), .trigger)
+    }
+
     func testValidationAndPhysicalKeyTitle() {
         XCTAssertTrue(custom.isValid)
         XCTAssertEqual(custom.title, "⌃K")
