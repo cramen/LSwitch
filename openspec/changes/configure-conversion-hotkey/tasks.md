@@ -14,4 +14,4 @@
 
 ## 4. Option+Space
 
-- [ ] 4.1 Разрешить Option+Space и добавить «Пробел» в UI; проверить валидатор, persistence, repeat, обычный пробел и живые conversion/undo без лишнего пробела, build/test/strict CI.
+- [x] 4.1 Разрешить Option+Space и добавить «Пробел» в UI; проверить валидатор, persistence, repeat, обычный пробел и живые conversion/undo без лишнего пробела, build/test/strict CI.

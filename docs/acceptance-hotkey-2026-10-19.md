@@ -59,3 +59,10 @@ OpenSpec strict: 7/7. Все пять задач change выполнены.
 доставку plain Space не подтвердил; повтор с wait:300 подтвердил её и в control,
 и с активным сочетанием. Логи `.build/option-space-{test,outcomes,plain-active}.log`.
 После теста возвращён двойной Shift; default приложения не изменён.
+
+Дополнение принято: CI `a47fff9` зелёный,
+https://github.com/cramen/LSwitch/actions/runs/39181635350 .
+Установлена и запущена та же проверенная сборка Option+Space, SHA256
+`67d14fac3e07f5922b8e3bc2bc70b991c75243694a191bbde33e170ac4eef17b`.
+Предыдущая версия — `.build/LSwitch-before-option-space-20261019.app`.
+Текущий выбранный хоткей оставлен double Shift; пользователь может выбрать Option+Space в UI.
