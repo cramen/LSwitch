@@ -33,3 +33,15 @@ checks проходят. Логи `.build/local-profiles-{build,test,release,pro
 разрешённым драйвером. Не заявляется совместимость каждого режима с любым редактором.
 Финальная версия дополнительно связывает clipboard context с revision профилей
 и убирает устаревшее сообщение «сохранён» после редактирования режима.
+
+## Финальная установка
+
+CI `fec0cf7` зелёный: https://github.com/cramen/LSwitch/actions/runs/39244185608 .
+Первый CI нашёл только large_tuple в тестовой фикстуре; он заменён структурой.
+Build, Release, 1158 tests, 27 protocol groups и strict SwiftLint прошли.
+OpenSpec strict: 9/9. Все четыре задачи change выполнены.
+
+Финальная сборка установлена в `.build/LSwitch.app`, SHA256
+`811281649da871dd362473ca3fc71fbb8810a55ec342068b32c10a4c5493329a`.
+Проверен новый раздел UI, пустой список overrides и сохранённый Option+Space.
+Предыдущая сборка: `.build/LSwitch-before-local-profiles-20261019.app`.
