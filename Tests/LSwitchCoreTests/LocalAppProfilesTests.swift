@@ -139,10 +139,16 @@ final class LocalAppProfilesTests: XCTestCase {
         XCTAssertEqual(third.clipboard.requests.count, 1)
     }
 
+    private struct StoreFixture {
+        let store: LocalAppProfiles
+        let defaults: UserDefaults
+        let name: String
+    }
+
     @MainActor
-    private func makeStore() throws -> (store: LocalAppProfiles, defaults: UserDefaults, name: String) {
+    private func makeStore() throws -> StoreFixture {
         let name = "LSwitch.LocalProfilesTests.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
-        return (LocalAppProfiles(defaults: defaults), defaults, name)
+        return StoreFixture(store: LocalAppProfiles(defaults: defaults), defaults: defaults, name: name)
     }
 }
