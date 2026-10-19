@@ -4,6 +4,32 @@ import XCTest
 
 final class ClipboardApplicationPolicyTests: XCTestCase {
     @MainActor
+    func testCodexSelectsClipboardBeforeAXAndKeepsExactUndo() async {
+        let fixture = ConverterFixture()
+        fixture.bundleID = "com.openai.codex"
+        fixture.clipboardPreferred = AppProfiles().prefersClipboard(bundleID: "com.openai.codex")
+        XCTAssertTrue(fixture.clipboardPreferred)
+        XCTAssertTrue(AppProfiles.prefersKeyboardCommands(bundleID: fixture.bundleID))
+        XCTAssertTrue(AppProfiles.prefersKeyboardSelection(bundleID: fixture.bundleID))
+        XCTAssertFalse(AppProfiles.prefersKeyboardCommands(bundleID: "com.openai.chat"))
+        XCTAssertFalse(AppProfiles.prefersKeyboardSelection(bundleID: "com.openai.codex.other"))
+        let editor = ClipboardEditor(text: "ghbdtn")
+        editor.selectionMethod = .keyboard
+        editor.applicationBundleID = fixture.bundleID
+        let engine = editor.converter()
+        fixture.clipboardEngine.handler = { await engine.perform($0) }
+        let converted = await fixture.converter.trigger(expectedWord: "ghbdtn")
+        XCTAssertEqual(converted, .converted(original: "ghbdtn", converted: "привет"))
+        XCTAssertTrue(fixture.axEngine.requests.isEmpty)
+        XCTAssertEqual(editor.text, "привет")
+        XCTAssertEqual(editor.clipboard, "clipboard before")
+        let undone = await fixture.converter.trigger()
+        XCTAssertEqual(undone, .undone)
+        XCTAssertEqual(editor.text, "ghbdtn")
+        XCTAssertTrue(fixture.axEngine.requests.isEmpty)
+    }
+
+    @MainActor
     func testVSCodeDefaultManualAndAutoRefuseBeforePayloadCaptureAndMutation() async {
         for automatic in [false, true] {
             let editor = ClipboardEditor(text: "ghbdtn ")

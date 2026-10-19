@@ -20,21 +20,21 @@ public final class AppProfiles {
         if Self.clipboardRejection(bundleID: bundleID) != nil { return true }
         // WebKit может сообщить успех AX-записи без замены, оставив DOM-выделение
         // несогласованным с AX. Для Safari используем нативный Copy/Paste сразу.
-        if bundleID == "com.apple.Safari" || bundleID == "com.google.Chrome" { return true }
+        if bundleID == "com.apple.Safari" || Self.prefersKeyboardCommands(bundleID: bundleID) { return true }
         if let cached = cache[bundleID] { return cached }
         let detected = detectElectron(bundleID: bundleID)
         cache[bundleID] = detected
         return detected
     }
 
-    /// AXPress меню Chrome принят без эффекта в живой проверке; CGEvent Cmd+C/V работают.
+    /// Web-редакторы: обход AXPress меню и неподтверждаемой записи AXSelectedText.
     static func prefersKeyboardCommands(bundleID: String?) -> Bool {
-        bundleID == "com.google.Chrome"
+        bundleID == "com.google.Chrome" || bundleID == "com.openai.codex"
     }
 
     /// Транспорт выбирается до мутации; AX остаётся источником проверяемого снимка.
     static func prefersKeyboardSelection(bundleID: String?) -> Bool {
-        bundleID == "com.google.Chrome"
+        prefersKeyboardCommands(bundleID: bundleID)
     }
 
     /// VS Code подтвердил AX-выделение, но Paste дописала результат рядом с исходником.
