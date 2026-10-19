@@ -19,6 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var settingsWindow: NSWindow?
 
     let settings = SettingsStore()
+    let localProfiles = LocalAppProfiles()
     lazy var hotkeySettings: HotkeySettingsController = {
         let controller = HotkeySettingsController(settings: settings)
         controller.onChange = { [weak self] in self?.resetInputContext() }
@@ -165,6 +166,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let hotkeyResult = detector.handle(raw, hotkey: hotkeySettings.activeHotkey)
         guard settings.enabled, permGuard.current.allGranted, eventTap != nil, raw.type != .other,
               !appRules.isBlocked(bundleID: currentFrontmostBundleID()),
+              localProfiles.mode(for: currentFrontmostBundleID()) != .disabled,
               let target = InputSafety.captureTarget() else {
             resetInputContext()
             return
@@ -353,8 +355,11 @@ extension AppDelegate {
             prefersClipboard: { [appProfiles] in
                 AcceptanceOptions.prefersClipboard(defaultValue: appProfiles.prefersClipboard(bundleID: $0))
             },
+            localProfiles: localProfiles,
             makeAXEngine: { AXConversionEngine() },
-            makeClipboardEngine: { AcceptanceOptions.makeClipboardEngine() },
+            makeClipboardEngine: { [localProfiles] in
+                AcceptanceOptions.makeClipboardEngine(localProfiles: localProfiles)
+            },
             makeUnicodeEngine: { AcceptanceOptions.makeUnicodeEngine(bundleID: $0) },
             recoverySessionFactory: conversions.factory, recoveryOwner: conversions.owner,
             beginInputHold: { [weak self] in

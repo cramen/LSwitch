@@ -9,6 +9,7 @@ struct ClipboardCommandTransport {
     }
 
     var forceKeyboard = false
+    var keyboardPreference: (String?) -> Bool = { AppProfiles.prefersKeyboardCommands(bundleID: $0) }
     var currentTarget: () -> Target?
     var prepareMenu: (pid_t, @escaping @MainActor () -> Bool) -> Void
     var invokeMenu: (ClipboardCommand, pid_t, @escaping @MainActor () -> Bool) -> MenuCommand.Outcome
@@ -83,6 +84,6 @@ struct ClipboardCommandTransport {
     }
 
     private func usesKeyboard(_ target: Target) -> Bool {
-        forceKeyboard || AppProfiles.prefersKeyboardCommands(bundleID: target.bundleID)
+        forceKeyboard || keyboardPreference(target.bundleID)
     }
 }

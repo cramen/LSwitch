@@ -48,13 +48,13 @@ struct ClipboardEnvironment {
 
     static func live(
         pasteboard: NSPasteboard, keyboardOnly: Bool = false,
-        applicationPolicy: ClipboardApplicationPolicy? = nil
+        applicationPolicy: ClipboardApplicationPolicy? = nil, localProfiles: LocalAppProfiles? = nil
     ) -> ClipboardEnvironment {
         let binding = ClipboardDiagnosticsBinding()
-        let transport = makeTransport(forceKeyboard: keyboardOnly, diagnostics: binding)
+        let transport = makeTransport(forceKeyboard: keyboardOnly, diagnostics: binding, localProfiles: localProfiles)
         let policy = applicationPolicy ?? ClipboardApplicationPolicy()
         return ClipboardEnvironment(
-            captureContext: { makeContext(applicationPolicy: policy) },
+            captureContext: { makeContext(applicationPolicy: policy, localProfiles: localProfiles) },
             prepare: { transport.prepare(isValid: $0) },
             capture: {
                 await PasteboardCaptureWorker.shared.capture(named: pasteboard.name.rawValue,
@@ -97,10 +97,13 @@ struct ClipboardEnvironment {
     }
 
     private static func makeTransport(
-        forceKeyboard: Bool, diagnostics: ClipboardDiagnosticsBinding
+        forceKeyboard: Bool, diagnostics: ClipboardDiagnosticsBinding, localProfiles: LocalAppProfiles?
     ) -> ClipboardCommandTransport {
         ClipboardCommandTransport(
             forceKeyboard: forceKeyboard,
+            keyboardPreference: {
+                localProfiles?.mode(for: $0) == .keyboardClipboard || AppProfiles.prefersKeyboardCommands(bundleID: $0)
+            },
             currentTarget: {
                 guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
                 return .init(processID: application.processIdentifier, bundleID: application.bundleIdentifier)
@@ -133,43 +136,50 @@ struct ClipboardEnvironment {
         )
     }
 
-    private static func makeContext(applicationPolicy: ClipboardApplicationPolicy) -> Context? {
+    private static func makeContext(
+        applicationPolicy: ClipboardApplicationPolicy, localProfiles: LocalAppProfiles?
+    ) -> Context? {
         guard let application = NSWorkspace.shared.frontmostApplication else { return nil }
         return applicationPolicy.capture(bundleID: application.bundleIdentifier) {
             guard let target = InputSafety.captureTarget(),
                   target.capturedApplicationPID == application.processIdentifier else { return nil }
-            return makeContext(target: target, bundleID: application.bundleIdentifier)
+            return makeContext(target: target, bundleID: application.bundleIdentifier, localProfiles: localProfiles)
         }
     }
 
-    private static func makeContext(target: InputTarget, bundleID: String?) -> Context {
-        let keyboardSelection = AppProfiles.prefersKeyboardSelection(bundleID: bundleID)
-        return Context(isValid: { target.isCurrent() }, selectedText: {
-            guard target.isCurrent() else { return nil }
+    private static func makeContext(
+        target: InputTarget, bundleID: String?, localProfiles: LocalAppProfiles?
+    ) -> Context {
+        let keyboardSelection = localProfiles?.mode(for: bundleID) == .keyboardClipboard
+            || AppProfiles.prefersKeyboardSelection(bundleID: bundleID)
+        let revision = localProfiles?.revision
+        let current = { target.isCurrent() && localProfiles?.revision == revision }
+        return Context(isValid: { current() }, selectedText: {
+            guard current() else { return nil }
             var value: CFTypeRef?
             guard AXUIElementCopyAttributeValue(
                 target.element, kAXSelectedTextAttribute as CFString, &value
             ) == .success else { return nil }
             return value as? String
         }, readState: {
-            guard target.isCurrent() else { return nil }
+            guard current() else { return nil }
             return readState(of: target.element)
         }, setSelection: { range in
             let access = SystemAXTextAccess()
-            guard target.isCurrent(), access.canSetSelection(in: target.element) else { return false }
-            return access.setSelection(range, in: target.element) && target.isCurrent()
+            guard current(), access.canSetSelection(in: target.element) else { return false }
+            return access.setSelection(range, in: target.element) && current()
         }, prepareSelection: { range in
             let access = SystemAXTextAccess()
-            guard target.isCurrent(), access.canSetSelection(in: target.element) else { return nil }
+            guard current(), access.canSetSelection(in: target.element) else { return nil }
             return access.prepareSelection(range, in: target.element)
         }, safetyFailure: { target.invalidationReason }, automaticContext: {
-            guard target.isCurrent() else { return .unknown }
+            guard current() else { return .unknown }
             let context = SystemAutomaticTextContext.read(in: target.element)
-            return target.isCurrent() ? context : .unknown
+            return current() ? context : .unknown
         }, documentIdentity: {
-            guard target.isCurrent() else { return nil }
+            guard current() else { return nil }
             let identity = SystemAutomaticTextContext.documentIdentity(in: target.element)
-            return target.isCurrent() ? identity : nil
+            return current() ? identity : nil
         }, selectionMethod: keyboardSelection ? .keyboard : .accessibility)
     }
 

@@ -13,8 +13,16 @@ extension Converter {
     }
 
     func captureCheck(diagnostics: ConversionDiagnostics) -> ContextCheck? {
-        if let captureContext { return captureContext() }
-        guard let target = InputSafety.captureTarget(diagnostics: diagnostics) else { return nil }
-        return { target.isCurrent(diagnostics: diagnostics) }
+        let context: ContextCheck
+        if let captureContext {
+            guard let captured = captureContext() else { return nil }
+            context = captured
+        } else {
+            guard let target = InputSafety.captureTarget(diagnostics: diagnostics) else { return nil }
+            context = { target.isCurrent(diagnostics: diagnostics) }
+        }
+        let profiles = localProfiles
+        let revision = profiles?.revision
+        return { profiles?.revision == revision && context() && profiles?.revision == revision }
     }
 }

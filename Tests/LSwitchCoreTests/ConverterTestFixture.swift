@@ -42,6 +42,7 @@ final class ConverterFixture {
     var bundleID: String? = "com.example.TextEdit"
     var safe = true
     var contextValid = true
+    var localProfiles: LocalAppProfiles?
     var clipboardPreferred = false
     var unicodePreferred = false
 
@@ -66,6 +67,7 @@ final class ConverterFixture {
         appRules: rules, undoStore: undoStore,
         frontmostBundleID: { [weak self] in self?.bundleID },
         prefersClipboard: { [weak self] _ in self?.clipboardPreferred == true },
+        localProfiles: localProfiles,
         makeAXEngine: { [axEngine] in axEngine },
         makeClipboardEngine: { [clipboardEngine] in clipboardEngine },
         makeUnicodeEngine: { [weak self] _ in

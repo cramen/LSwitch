@@ -25,7 +25,7 @@ enum AcceptanceOptions {
         }
     }
 
-    static func makeClipboardEngine() -> any ConversionEngine {
+    static func makeClipboardEngine(localProfiles: LocalAppProfiles? = nil) -> any ConversionEngine {
         #if DEBUG
         if selectedEngine == .accessibility { return UnavailableAcceptanceEngine() }
         if selectedEngine == .keyboard {
@@ -37,7 +37,7 @@ enum AcceptanceOptions {
             )
         }
         #endif
-        return ClipboardConversionEngine()
+        return ClipboardConversionEngine(localProfiles: localProfiles)
     }
 
     static func makeUnicodeEngine(bundleID: String) -> (any ConversionEngine)? {

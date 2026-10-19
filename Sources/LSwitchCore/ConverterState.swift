@@ -15,9 +15,10 @@ public struct AXConversionEngine: ConversionEngine {
 
 @MainActor
 public struct ClipboardConversionEngine: ConversionEngine {
-    public init() {}
+    private let localProfiles: LocalAppProfiles?
+    public init(localProfiles: LocalAppProfiles? = nil) { self.localProfiles = localProfiles }
     public func perform(_ request: ConversionRequest) async -> ConversionResult {
-        await ClipboardConverter().perform(request)
+        await ClipboardConverter(localProfiles: localProfiles).perform(request)
     }
 }
 

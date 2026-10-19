@@ -105,6 +105,7 @@ final class TrackedConverterFixture {
     var safe = true
     var factoryAvailable = true
     var factoryCalls = 0
+    var localProfiles: LocalAppProfiles?
     var clipboardPreferred = false
     var unicodePreferred = false
     var layoutAccepted = true
@@ -129,6 +130,7 @@ final class TrackedConverterFixture {
             return self.layoutAccepted
         }, appRules: rules, undoStore: undoStore, frontmostBundleID: { "com.example.TextEdit" },
         prefersClipboard: { [weak self] _ in self?.clipboardPreferred == true },
+        localProfiles: localProfiles,
         makeAXEngine: { [accessibility] in accessibility },
         makeClipboardEngine: { [clipboard] in clipboard },
         makeUnicodeEngine: { [weak self] _ in self?.unicodePreferred == true ? self?.unicode : nil },

@@ -41,10 +41,11 @@ public final class ClipboardConverter: ConversionEngine {
 
     public init(
         configuration: Configuration = Configuration(),
+        localProfiles: LocalAppProfiles? = nil,
         transform: (@Sendable (String) -> String)? = nil
     ) {
         self.configuration = configuration
-        self.environment = .live(pasteboard: .general)
+        self.environment = .live(pasteboard: .general, localProfiles: localProfiles)
         self.transform = transform
     }
 

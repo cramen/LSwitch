@@ -12,6 +12,8 @@ public final class Converter {
     private let appRules: AppRules
     let undoStore: UndoStore
     private let frontmostBundleID: () -> String?
+    let localProfiles: LocalAppProfiles?
+    private var observedProfileRevision: UInt64 = 0
     let prefersClipboard: (String) -> Bool
     let makeAXEngine: () -> any ConversionEngine
     let makeClipboardEngine: () -> any ConversionEngine
@@ -46,7 +48,7 @@ public final class Converter {
         let diagnostics: ConversionDiagnostics
     }
     public private(set) var isBusy = false
-    public private(set) var modeCache: [String: ConversionMode] = [:]
+    public internal(set) var modeCache: [String: ConversionMode] = [:]
 
     public convenience init(
         layoutManager: LayoutManager,
@@ -54,6 +56,7 @@ public final class Converter {
         undoStore: UndoStore,
         frontmostBundleID: @escaping () -> String?,
         prefersClipboard: @escaping (String) -> Bool = { _ in false },
+        localProfiles: LocalAppProfiles? = nil,
         beginInputHold: @escaping () -> Bool = { true },
         endInputHold: @escaping () -> Void = {},
         isInputHoldValid: @escaping () -> Bool = { true },
@@ -65,9 +68,9 @@ public final class Converter {
             currentLayout: { layoutManager.currentLayout() },
             switchLayout: { layoutManager.switchTo($0) },
             appRules: appRules, undoStore: undoStore,
-            frontmostBundleID: frontmostBundleID, prefersClipboard: prefersClipboard,
+            frontmostBundleID: frontmostBundleID, prefersClipboard: prefersClipboard, localProfiles: localProfiles,
             makeAXEngine: { AXConversionEngine() },
-            makeClipboardEngine: { ClipboardConversionEngine() },
+            makeClipboardEngine: { ClipboardConversionEngine(localProfiles: localProfiles) },
             beginInputHold: beginInputHold, endInputHold: endInputHold,
             isInputHoldValid: isInputHoldValid, drainPendingInput: drainPendingInput,
             onLayoutSwitched: onLayoutSwitched,
@@ -82,6 +85,7 @@ public final class Converter {
         undoStore: UndoStore,
         frontmostBundleID: @escaping () -> String?,
         prefersClipboard: @escaping (String) -> Bool = { _ in false },
+        localProfiles: LocalAppProfiles? = nil,
         makeAXEngine: @escaping () -> any ConversionEngine,
         makeClipboardEngine: @escaping () -> any ConversionEngine,
         makeUnicodeEngine: ((String) -> (any ConversionEngine)?)? = nil,
@@ -100,6 +104,7 @@ public final class Converter {
         self.appRules = appRules
         self.undoStore = undoStore
         self.frontmostBundleID = frontmostBundleID
+        self.localProfiles = localProfiles
         self.prefersClipboard = prefersClipboard
         self.makeAXEngine = makeAXEngine
         self.makeClipboardEngine = makeClipboardEngine
@@ -113,6 +118,13 @@ public final class Converter {
         self.endInputHold = endInputHold
         self.isInputHoldValid = isInputHoldValid
         self.drainPendingInput = drainPendingInput
+    }
+
+    private func synchronizeLocalProfiles() {
+        guard observedProfileRevision != (localProfiles?.revision ?? 0) else { return }
+        observedProfileRevision = localProfiles?.revision ?? 0
+        modeCache.removeAll()
+        notifyOtherKeystroke()
     }
 
     public func notifyOtherKeystroke() {
@@ -151,9 +163,11 @@ extension Converter {
             diagnostics.reject(.busy)
             return .busy
         }
+        synchronizeLocalProfiles()
         guard !hasPendingRecovery else { return .recoveryRequired }
         guard recoveryOwner?.isOccupied != true else { return .busy }
-        guard let bundleID, !appRules.isBlocked(bundleID: bundleID) else {
+        guard let bundleID, !appRules.isBlocked(bundleID: bundleID),
+              localProfiles?.mode(for: bundleID) != .disabled else {
             diagnostics.reject(.rules)
             return .blockedByRules
         }
@@ -368,33 +382,6 @@ extension Converter {
             guard context() else { return diagnostics.reject(.contextChanged) }
             guard !self.inputHeld || self.isInputHoldValid() else { return diagnostics.reject(.holdExpired) }
             return true
-        }
-    }
-
-    private func perform(_ request: ConversionRequest, bundleID: String) async -> ConversionResult {
-        guard request.isValid() else { return .blocked }
-        if let engine = makeUnicodeEngine?(bundleID) {
-            request.diagnostics?.mark(.engineStarted, mechanism: .unicode)
-            return await engine.perform(request)
-        }
-        if modeCache[bundleID] == .clipboard || prefersClipboard(bundleID) {
-            request.diagnostics?.mark(.engineStarted, mechanism: .clipboard)
-            return await makeClipboardEngine().perform(request)
-        }
-        request.diagnostics?.mark(.engineStarted, mechanism: .accessibility)
-        let result = await makeAXEngine().perform(request)
-        switch result {
-        case .success:
-            modeCache[bundleID] = .accessibility
-            return result
-        case .unavailable:
-            guard request.isValid() else { return .blocked }
-            request.diagnostics?.mark(.engineStarted, mechanism: .clipboard)
-            let fallback = await makeClipboardEngine().perform(request)
-            if case .success = fallback { modeCache[bundleID] = .clipboard }
-            return fallback
-        case .blocked, .failed:
-            return result
         }
     }
 }

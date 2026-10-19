@@ -8,6 +8,7 @@ import SwiftUI
 struct SettingsView: View {
 
     @ObservedObject var settings: SettingsStore
+    let localProfiles: LocalAppProfiles
     let hotkeys: HotkeySettingsController
     let appRules: AppRules
     @ObservedObject var personalDictionary: PersonalDictionary
@@ -17,7 +18,8 @@ struct SettingsView: View {
     @StateObject private var launchAtLogin: LaunchAtLoginController
 
     init(settings: SettingsStore, appRules: AppRules, personalDictionary: PersonalDictionary,
-         hotkeys: HotkeySettingsController) {
+         hotkeys: HotkeySettingsController, localProfiles: LocalAppProfiles) {
+        self.localProfiles = localProfiles
         self.hotkeys = hotkeys
         self.settings = settings
         self.appRules = appRules
@@ -42,6 +44,7 @@ struct SettingsView: View {
                 step: 1
             )
             HotkeySettingsView(settings: settings, controller: hotkeys)
+            LocalAppProfilesView(profiles: localProfiles)
             launchAtLoginSection
             dictionarySection
             blockedAppsSection
