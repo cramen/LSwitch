@@ -86,3 +86,14 @@ GitHub Actions (`.github/workflows/ci.yml`), раннер `macos-14`: явный
 
 Для релиза нужен Apple Developer ID (сертификата на машине нет) +
 notarization + dmg. Решение о дистрибуции вне Mac App Store — ADR-001.
+
+## Предварительный дистрибутив
+
+Из чистого закоммиченного checkout: `make release-dist RELEASE_VERSION=0.1.0-alpha.1`.
+Результат: `dist/0.1.0-alpha.1/` (Universal ZIP/DMG, SHA256SUMS.txt и build-info.json).
+Повторная сборка требует нового RELEASE_DIR, чтобы не перезаписывать готовый кандидат.
+Рецепт собирает Release arm64/x86_64 отдельно и объединяет lipo; ресурсы сравниваются.
+Рабочая `.build/LSwitch.app` не изменяется. В alpha используется ad-hoc подпись,
+не локальный сертификат LSwitch Dev. Это не замена Developer ID/notarization
+для стабильного выпуска. Отсутствие notarization и открытый риск recovery
+обязательно указываются в release notes и README поставки.

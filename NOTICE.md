@@ -8,6 +8,6 @@
 (hermitdave), данные корпуса OpenSubtitles.
 
 Лицензия исходных данных: Creative Commons Attribution-ShareAlike 4.0
-International (CC BY-SA 4.0). Модификация: взяты первые 50 000 слов,
+International ([CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)). Модификация: взяты первые 50 000 слов,
 оставлены только буквенные слова длиной ≥ 3 в нижнем регистре,
 частоты отброшены.

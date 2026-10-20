@@ -28,6 +28,9 @@ jobs:
       - name: Recovery protocol checks
         run: make DEVELOPER_DIR="$(xcode-select -p)" check-recovery-protocol
 
+      - name: Release packaging syntax
+        run: python3 -m py_compile scripts/package-release.py
+
       - name: SwiftLint
         run: |
           brew install swiftlint

@@ -75,3 +75,10 @@ run-app-refuse-ru: app
 
 run-app-refuse-en: app
 	open $(APP_DIR) --args --test-refuse-layout=en
+
+# Публичный предварительный дистрибутив. Рабочий dev-бандл не изменяется.
+.PHONY: release-dist
+RELEASE_VERSION ?= 0.1.0-alpha.1
+RELEASE_DIR ?= dist/$(RELEASE_VERSION)
+release-dist:
+	python3 scripts/package-release.py --version "$(RELEASE_VERSION)" --output "$(RELEASE_DIR)"
