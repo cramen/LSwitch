@@ -5,7 +5,12 @@
 
 ## Скачать приложение
 
-Предварительные сборки публикуются в [GitHub Releases](https://github.com/cramen/LSwitch/releases).
+Текущий предварительный выпуск: [v0.1.0-alpha.1](https://github.com/cramen/LSwitch/releases/tag/v0.1.0-alpha.1).
+
+[Скачать DMG](https://github.com/cramen/LSwitch/releases/download/v0.1.0-alpha.1/LSwitch-0.1.0-alpha.1-macOS-universal.dmg)
+· [Скачать ZIP](https://github.com/cramen/LSwitch/releases/download/v0.1.0-alpha.1/LSwitch-0.1.0-alpha.1-macOS-universal.zip)
+· [SHA256](https://github.com/cramen/LSwitch/releases/download/v0.1.0-alpha.1/SHA256SUMS.txt)
+
 Поставка — Universal `.app` для macOS 13+ (Apple Silicon и Intel), в ZIP и DMG.
 Это **экспериментальная alpha**, без Developer ID и notarization Apple.
 **Известен риск потери ввода при неоднозначном сбое редактирования:**
